@@ -14,8 +14,6 @@ from evaluate import exact_match_score, f1_score
 
 logging.basicConfig(level=logging.INFO)
 
-tf.nn.rnn_cell.LSTMCell
-
 def get_optimizer(opt):
     if opt == "adam":
         optfn = tf.train.AdamOptimizer
