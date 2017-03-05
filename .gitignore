@@ -1,0 +1,6 @@
+**/.idea/
+code/data/
+*.pyc
+
+# OSX Specific
+.DS_Store
