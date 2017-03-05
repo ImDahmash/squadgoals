@@ -11,9 +11,10 @@ import random
 
 from collections import Counter
 from six.moves.urllib.request import urlretrieve
+from six.moves import reload_module
 
-reload(sys)
-sys.setdefaultencoding('utf8')
+reload_module(sys)
+#sys.setdefaultencoding('utf8')
 random.seed(42)
 np.random.seed(42)
 
@@ -78,7 +79,7 @@ def list_topics(data):
 
 def tokenize(sequence):
     tokens = [token.replace("``", '"').replace("''", '"') for token in nltk.word_tokenize(sequence)]
-    return map(lambda x:x.encode('utf8'), tokens)
+    return list(map(lambda x:x.encode('utf8'), tokens))
 
 
 def token_idx_map(context, context_tokens):
@@ -89,7 +90,7 @@ def token_idx_map(context, context_tokens):
     for char_idx, char in enumerate(context):
         if char != u' ':
             acc += char
-            context_token = unicode(context_tokens[current_token_idx])
+            context_token = context_tokens[current_token_idx]
             if acc == context_token:
                 syn_start = char_idx - len(acc) + 1
                 token_map[syn_start] = [acc, current_token_idx]
@@ -212,7 +213,7 @@ if __name__ == '__main__':
     train_filename = "train-v1.1.json"
     dev_filename = "dev-v1.1.json"
 
-    train_dataset = maybe_download(squad_base_url, train_filename, prefix, 30288272L)
+    train_dataset = maybe_download(squad_base_url, train_filename, prefix, 30288272)
 
     train_data = data_from_json(os.path.join(prefix, train_filename))
 
@@ -229,7 +230,7 @@ if __name__ == '__main__':
     print("Processed {} questions and {} answers in train".format(train_num_questions, train_num_answers))
 
     print("Downloading {}".format(dev_filename))
-    dev_dataset = maybe_download(squad_base_url, dev_filename, prefix, 4854279L)
+    dev_dataset = maybe_download(squad_base_url, dev_filename, prefix, 4854279)
 
     # In dev, we have 10k+ questions, and around 3 answers per question (totaling
     # around 34k+ answers).
