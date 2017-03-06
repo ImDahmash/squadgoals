@@ -44,6 +44,11 @@ def pos_tags():
     return histogram_starts, histogram_ends
 
 if __name__ == '__main__':
+
+    # Ensure the POS Tagger model is present for nltk
+    print("Ensuring tagger model present...")
+    nltk.download("averaged_perceptron_tagger")
+
     print("Average length of spans: {:.2f} tokens".format(average_span_length()))
 
     first_pos_hist, last_pos_hist = pos_tags()
