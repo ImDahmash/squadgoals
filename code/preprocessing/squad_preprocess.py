@@ -1,20 +1,18 @@
 from __future__ import print_function
-import argparse
+
 import json
 import linecache
+import os
+import random
+import sys
+
 import nltk
 import numpy as np
-import os
-import sys
-from tqdm import tqdm
-import random
-
-from collections import Counter
-from six.moves.urllib.request import urlretrieve
 from six.moves import reload_module
+from six.moves.urllib.request import urlretrieve
+from tqdm import tqdm
 
 reload_module(sys)
-#sys.setdefaultencoding('utf8')
 random.seed(42)
 np.random.seed(42)
 
@@ -73,13 +71,11 @@ def data_from_json(filename):
 
 
 def list_topics(data):
-    list_topics = [data['data'][idx]['title'] for idx in range(0,len(data['data']))]
-    return list_topics
+    return [datum['title'] for datum in data['data']]
 
 
 def tokenize(sequence):
-    tokens = [token.replace("``", '"').replace("''", '"') for token in nltk.word_tokenize(sequence)]
-    return list(map(lambda x:x.encode('utf8'), tokens))
+    return [token.replace("``", '"').replace("''", '"') for token in nltk.word_tokenize(sequence)]
 
 
 def token_idx_map(context, context_tokens):
@@ -119,10 +115,6 @@ def read_write_dataset(dataset, tier, prefix):
             article_paragraphs = dataset['data'][articles_id]['paragraphs']
             for pid in range(len(article_paragraphs)):
                 context = article_paragraphs[pid]['context']
-                # The following replacements are suggested in the paper
-                # BidAF (Seo et al., 2016)
-                context = context.replace("''", '" ')
-                context = context.replace("``", '" ')
 
                 context_tokens = tokenize(context)
                 answer_map = token_idx_map(context, context_tokens)
@@ -166,7 +158,7 @@ def read_write_dataset(dataset, tier, prefix):
 
                         an += 1
 
-    print("Skipped {} question/answer pairs in {}".format(skipped, tier))
+    print("Skipped {} question/answer pairs of {} in {}".format(skipped, an, tier))
     return qn,an
 
 
@@ -190,12 +182,12 @@ def split_tier(prefix, train_percentage = 0.9, shuffle=False):
     with open(context_filename) as current_file:
         num_lines = sum(1 for line in current_file)
     # Get indices and split into two files
-    indices_dev = range(num_lines)[int(num_lines * train_percentage)::]
+    indices_dev = list(range(num_lines))[int(num_lines * train_percentage)::]
     if shuffle:
         np.random.shuffle(indices_dev)
         print("Shuffling...")
     save_files(prefix, 'val', indices_dev)
-    indices_train = range(num_lines)[:int(num_lines * train_percentage)]
+    indices_train = list(range(num_lines))[:int(num_lines * train_percentage)]
     if shuffle:
         np.random.shuffle(indices_train)
     save_files(prefix, 'train', indices_train)
