@@ -15,14 +15,15 @@ from tqdm import *
 import numpy as np
 from os.path import join as pjoin
 
-_PAD = b"<pad>"
-_SOS = b"<sos>"
-_UNK = b"<unk>"
+_PAD = "<pad>"
+_SOS = "<sos>"
+_UNK = "<unk>"
 _START_VOCAB = [_PAD, _SOS, _UNK]
 
 PAD_ID = 0
 SOS_ID = 1
 UNK_ID = 2
+
 
 def setup_args():
     parser = argparse.ArgumentParser()
@@ -33,7 +34,7 @@ def setup_args():
     parser.add_argument("--source_dir", default=source_dir)
     parser.add_argument("--glove_dir", default=glove_dir)
     parser.add_argument("--vocab_dir", default=vocab_dir)
-    parser.add_argument("--glove_dim", default=50, type=int)
+    parser.add_argument("--glove_dim", default=100, type=int)
     return parser.parse_args()
 
 
@@ -96,9 +97,10 @@ def create_vocabulary(vocabulary_path, data_paths, tokenizer=None):
         print("Creating vocabulary %s from data %s" % (vocabulary_path, str(data_paths)))
         vocab = {}
         for path in data_paths:
-            with open(path, mode="rb") as f:
+            with open(path, mode="r") as f:
                 counter = 0
                 for line in f:
+                    line = line
                     counter += 1
                     if counter % 100000 == 0:
                         print("processing line %d" % counter)
@@ -110,9 +112,9 @@ def create_vocabulary(vocabulary_path, data_paths, tokenizer=None):
                             vocab[w] = 1
         vocab_list = _START_VOCAB + sorted(vocab, key=vocab.get, reverse=True)
         print("Vocabulary size: %d" % len(vocab_list))
-        with gfile.GFile(vocabulary_path, mode="wb") as vocab_file:
+        with gfile.GFile(vocabulary_path, mode="w") as vocab_file:
             for w in vocab_list:
-                vocab_file.write(w + b"\n")
+                vocab_file.write(w + "\n")
 
 
 def sentence_to_token_ids(sentence, vocabulary, tokenizer=None):
@@ -128,7 +130,7 @@ def data_to_token_ids(data_path, target_path, vocabulary_path,
     if not gfile.Exists(target_path):
         print("Tokenizing data in %s" % data_path)
         vocab, _ = initialize_vocabulary(vocabulary_path)
-        with gfile.GFile(data_path, mode="rb") as data_file:
+        with gfile.GFile(data_path, mode="r") as data_file:
             with gfile.GFile(target_path, mode="w") as tokens_file:
                 counter = 0
                 for line in data_file:
@@ -163,12 +165,12 @@ if __name__ == '__main__':
     # If your model loads data differently (like in bulk)
     # You should change the below code
 
-    x_train_dis_path = train_path + ".ids.context"
+    x_train_ids_path = train_path + ".ids.context"
     y_train_ids_path = train_path + ".ids.question"
-    data_to_token_ids(train_path + ".context", x_train_dis_path, vocab_path)
+    data_to_token_ids(train_path + ".context", x_train_ids_path, vocab_path)
     data_to_token_ids(train_path + ".question", y_train_ids_path, vocab_path)
 
-    x_dis_path = valid_path + ".ids.context"
+    x_ids_path = valid_path + ".ids.context"
     y_ids_path = valid_path + ".ids.question"
-    data_to_token_ids(valid_path + ".context", x_dis_path, vocab_path)
+    data_to_token_ids(valid_path + ".context", x_ids_path, vocab_path)
     data_to_token_ids(valid_path + ".question", y_ids_path, vocab_path)

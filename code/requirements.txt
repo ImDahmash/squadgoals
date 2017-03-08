@@ -15,6 +15,7 @@ jupyter==1.0.0
 jupyter-client==5.0.0
 jupyter-console==5.1.0
 jupyter-core==4.3.0
+Keras==1.2.2
 MarkupSafe==0.23
 matplotlib==2.0.0
 mistune==0.7.3
@@ -34,13 +35,16 @@ pyparsing==2.2.0
 PyPrind==2.10.0
 python-dateutil==2.6.0
 pytz==2016.10
+PyYAML==3.12
 pyzmq==16.0.2
 qtconsole==4.2.1
+scipy==0.18.1
 simplegeneric==0.8.1
 six==1.10.0
 tensorflow==1.0.0
 terminado==0.6
 testpath==0.3
+Theano==0.8.2
 tornado==4.4.2
 tqdm==4.11.2
 traitlets==4.3.2

@@ -13,8 +13,9 @@ from pprint import pprint
 import matplotlib.pyplot as plt
 import nltk
 import numpy as np
-
 from tqdm import tqdm
+
+import os
 
 def average_span_length():
     # Find average span length
@@ -67,6 +68,9 @@ def plot_bar_from_counter(counter, n=10):
 
 if __name__ == '__main__':
 
+    # Ensure directories are formed
+    os.makedirs("stats", exist_ok=True)
+
     # Ensure the POS Tagger model is present for nltk
     print("Ensuring tagger model present...")
     nltk.download("averaged_perceptron_tagger")
@@ -77,7 +81,7 @@ if __name__ == '__main__':
     plt.hist(spans_distribution, bins=np.arange(0, 10, 1))
     plt.xlabel("Span Length")
     plt.ylabel("Frequency")
-    plt.savefig("spans.png")
+    plt.savefig("stats/spans.png")
 
     first_pos_hist, last_pos_hist = pos_tags()
     print("POS First Token Histogram:")
@@ -86,7 +90,7 @@ if __name__ == '__main__':
     plot_bar_from_counter(first_pos_hist)
     plt.xlabel("First Token POS Tag")
     plt.ylabel("Frequency")
-    plt.savefig("pos_first.png")
+    plt.savefig("stats/pos_first.png")
 
     print("POS Last Token Histogram:")
     pprint(last_pos_hist)
@@ -94,4 +98,4 @@ if __name__ == '__main__':
     plot_bar_from_counter(last_pos_hist)
     plt.xlabel("Last Token POS Tag")
     plt.ylabel("Frequency")
-    plt.savefig("pos_last.png")
+    plt.savefig("stats/pos_last.png")
