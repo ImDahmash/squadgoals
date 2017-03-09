@@ -29,10 +29,16 @@ def load_glove():
         print("Error loading GloVe data: {}".format(e))
 
 
-def load_batch():
+def load_train_data():
     """
-    Returns a batch of the given size of the dataset.
+    Loads training data ready for consumption by training procedure.
     """
-
-    # TODO: this
     pass
+
+def minibatch_index_iterator(total_size, batch_size):
+    """
+    Generator that yields indexes to sample the minibatch from up to the total size.
+    """
+    order = np.random.permutation(total_size)
+    for i in range(0, order.shape[0], batch_size):
+        yield order[i:i+batch_size]

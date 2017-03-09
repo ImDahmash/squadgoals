@@ -11,7 +11,7 @@ class Config(object):
         self.max_length = options.get("max_length", 100)
         self.keep_prob = options.get("keep_prob", 0.99)
         self.num_classes = options.get("num_classes", 2)
-        self.embedding_size = options.get("embedding_size", 100)
+        self.embed_size = options.get("embed_size", 100)
         self.hidden_size = options.get("hidden_size", 150)
         self.cell_type = options.get("cell_type", "lstm")
 

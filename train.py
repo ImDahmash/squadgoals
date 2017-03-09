@@ -7,6 +7,7 @@ import tensorflow as tf
 from tqdm import tqdm
 
 from core import Config, SquadModel
+from utils import minibatch_index_iterator
 
 logging.getLogger().setLevel(logging.INFO)
 
@@ -46,7 +47,7 @@ def main(_):
         max_length=tf.flags.FLAGS.max_length,
         keep_prob=tf.flags.FLAGS.keep_prob,
         num_classes=2,
-        embedding_size=tf.flags.FLAGS.embed_size,
+        embed_size=tf.flags.FLAGS.embed_size,
         hidden_size=tf.flags.FLAGS.hidden_size,
         cell_type=tf.flags.FLAGS.cell_type,
     ))
@@ -55,8 +56,8 @@ def main(_):
 
     # Create a stupid batch of size 3 just for testing
     # All questions have length 10 and all passages have length 90 to be realistic
-    stupid_question_batch = np.random.normal(size=(config.batch_size, 10, config.embedding_size))
-    stupid_passage_batch = np.random.normal(size=(config.batch_size, 90, config.embedding_size))
+    stupid_question_batch = np.random.normal(size=(config.batch_size, 10, config.embed_size))
+    stupid_passage_batch = np.random.normal(size=(config.batch_size, 90, config.embed_size))
     stupid_answer_batch = np.ones(shape=(config.batch_size, 90))
 
     with tf.Session().as_default() as sess:
@@ -64,9 +65,11 @@ def main(_):
         for epoch in range(tf.flags.FLAGS.epochs):
 
             # Read a random batch of data
+            epoch_num = epoch + 1
             # Store all of the training set in memory (yikes?)
+            logging.info("epoch {} of {}".format(epoch_num, tf.flags.FLAGS.epochs))
 
-            bar = tqdm(range(30), unit=" minibatch")
+            bar = tqdm(minibatch_iterator(), unit="batch")
             for _ in bar:
                 loss = model.train_batch(stupid_question_batch,
                                          stupid_passage_batch,
@@ -74,7 +77,7 @@ def main(_):
                 fmt_loss = "{:.6f}".format(loss)
                 bar.set_postfix(loss=fmt_loss)
 
-            logging.info("epoch={:03d} loss={}".format(epoch, loss))
+            logging.info("epoch={:03d} loss={}".format(epoch_num, loss))
 
             if epoch % tf.flags.FLAGS.checkpoint_freq == 0:
                 # Perform evaluation on the smaller dev set.

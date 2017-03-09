@@ -20,13 +20,9 @@ class BaselineModel(SquadModel):
         self._train_step = None
 
     def initialize_graph(self, config):
-        # Setup placeholders
-        self._question_placeholder = tf.placeholder(tf.float32, [config.batch_size, None, config.embedding_size],
-                                                    "question_embedded_batch")
-        self._passage_placeholder = tf.placeholder(tf.float32, [config.batch_size, None, config.embedding_size],
-                                                   "passage_embedded_batch")
-        self._answer_placeholder = tf.placeholder(tf.int32, [config.batch_size, None],
-                                                  "answer_batch")
+        self._question_placeholder = tf.placeholder(tf.float32, [None, None, config.embed_size], "question_embedded")
+        self._passage_placeholder = tf.placeholder(tf.float32, [None, None, config.embedding_size], "passage_embedded")
+        self._answer_placeholder = tf.placeholder(tf.int32, [None, None], "answer_batch")
 
         if config.cell_type == "lstm":
             cell = rnn.LSTMCell(config.hidden_size)
@@ -35,10 +31,13 @@ class BaselineModel(SquadModel):
         else:
             raise ValueError("Invalid cell_type {}".format(config.cell_type))
 
-        # Setup the computation - We want to run both the question and the passage through a simple LSTM,
-        # then concatenate, run through another LSTM, get a bunch of outputs. This is great.
+        """
+        Run the question through an RNN, using the final output as the "summary" of the question.
 
-        # Encode the question
+        We then feed this summary h_q as the first hidden state to an encoder of the passage, which yields outputs
+        h_p. We then perform a final LSTM step where we encode the states h_p through a third RNN that outputs
+        a probability distribution per-token of the passage.
+        """
         with tf.variable_scope("question_rnn"):
             _, h_q = nn.dynamic_rnn(cell, self._question_placeholder, dtype=tf.float32)
         with tf.variable_scope("passage_rnn"):
@@ -76,9 +75,10 @@ class BaselineModel(SquadModel):
 
     def predict(self, question_ids, passage_ids):
         """
-        Fill this in to perform evaluation
+        Predicts the (start, end) span representing the answer for the given question over the given passage.
         :param question_ids:
         :param passage_ids:
-        :return:
+        :return: A tuple (start_idx, end_idx) that indicates the start and end of the answer zero-indexed
+                 relative to the passage.
         """
         pass
