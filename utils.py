@@ -29,12 +29,6 @@ def load_glove():
         print("Error loading GloVe data: {}".format(e))
 
 
-def load_train_data():
-    """
-    Loads training data ready for consumption by training procedure.
-    """
-    pass
-
 def minibatch_index_iterator(total_size, batch_size):
     """
     Generator that yields indexes to sample the minibatch from up to the total size.

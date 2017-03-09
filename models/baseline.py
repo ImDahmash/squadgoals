@@ -1,3 +1,5 @@
+from os.path import join as pjoin
+
 import tensorflow as tf
 from tensorflow import nn
 from tensorflow.contrib import rnn
@@ -18,11 +20,14 @@ class BaselineModel(SquadModel):
         self._cell = None
         self._loss = None
         self._train_step = None
+        self._model_output = None
 
     def initialize_graph(self, config):
         self._question_placeholder = tf.placeholder(tf.float32, [None, None, config.embed_size], "question_embedded")
-        self._passage_placeholder = tf.placeholder(tf.float32, [None, None, config.embedding_size], "passage_embedded")
+        self._passage_placeholder = tf.placeholder(tf.float32, [None, None, config.embed_size], "passage_embedded")
         self._answer_placeholder = tf.placeholder(tf.int32, [None, None], "answer_batch")
+
+        self._model_output = config.save_dir
 
         if config.cell_type == "lstm":
             cell = rnn.LSTMCell(config.hidden_size)
@@ -82,3 +87,10 @@ class BaselineModel(SquadModel):
                  relative to the passage.
         """
         pass
+
+    def checkpoint(self, sess=None):
+        if sess is None:
+            sess = tf.get_default_session()
+        save_file = pjoin(self._model_output, "model.weights")
+        saver = tf.train.Saver()
+        saver.save(sess, save_file)

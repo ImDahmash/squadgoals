@@ -1,5 +1,6 @@
 import logging
 import sys
+import math
 from importlib import import_module
 
 import numpy as np
@@ -50,15 +51,19 @@ def main(_):
         embed_size=tf.flags.FLAGS.embed_size,
         hidden_size=tf.flags.FLAGS.hidden_size,
         cell_type=tf.flags.FLAGS.cell_type,
+        save_dir=tf.flags.FLAGS.save_dir
     ))
     model = model_class()
     model.initialize_graph(config)
 
-    # Create a stupid batch of size 3 just for testing
-    # All questions have length 10 and all passages have length 90 to be realistic
-    stupid_question_batch = np.random.normal(size=(config.batch_size, 10, config.embed_size))
-    stupid_passage_batch = np.random.normal(size=(config.batch_size, 90, config.embed_size))
-    stupid_answer_batch = np.ones(shape=(config.batch_size, 90))
+    logging.info("Loading training data...")
+    train_data = np.load(tf.flags.FLAGS.train_path)
+    question = train_data["question"]
+    context = train_data["context"]
+    answer = train_data["answer"]
+    num_training_examples = context.shape[0]
+    batch_size = tf.flags.FLAGS.batch_size
+    num_batches = math.ceil(num_training_examples / batch_size)
 
     with tf.Session().as_default() as sess:
         sess.run(tf.global_variables_initializer())
@@ -69,13 +74,18 @@ def main(_):
             # Store all of the training set in memory (yikes?)
             logging.info("epoch {} of {}".format(epoch_num, tf.flags.FLAGS.epochs))
 
-            bar = tqdm(minibatch_iterator(), unit="batch")
-            for _ in bar:
-                loss = model.train_batch(stupid_question_batch,
-                                         stupid_passage_batch,
-                                         stupid_answer_batch)
+            # We want to return a set of indexes
+            batches = tqdm(minibatch_index_iterator(num_training_examples, batch_size), unit="batch", total=num_batches)
+            for batch_idxs in batches:
+                question_batch = question[batch_idxs]
+                context_batch = context[batch_idxs]
+                answer_batch = answer[batch_idxs]
+
+                loss = model.train_batch(question_batch,
+                                         context_batch,
+                                         answer_batch)
                 fmt_loss = "{:.6f}".format(loss)
-                bar.set_postfix(loss=fmt_loss)
+                batches.set_postfix(loss=fmt_loss)
 
             logging.info("epoch={:03d} loss={}".format(epoch_num, loss))
 
@@ -98,6 +108,7 @@ if __name__ == '__main__':
 
     tf.flags.DEFINE_float("keep_prob", 0.99, "inverse of drop probability")
 
+    tf.flags.DEFINE_string("train_path", "data/squad/train.npz", "Path to a .npz file that holds the training matrices")
     tf.flags.DEFINE_string("save_dir", "save", "path to save training results and model checkpoints")
     tf.flags.DEFINE_string("embed_path", "data/squad/glove.trimmed.100.npz", "path to npz file holding word embeddings")
 
