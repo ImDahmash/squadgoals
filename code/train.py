@@ -1,10 +1,14 @@
+import logging
 import sys
 from importlib import import_module
 
+import numpy as np
 import tensorflow as tf
-import tqdm
+from tqdm import tqdm
 
 from core import Config, SquadModel
+
+logging.getLogger().setLevel(logging.INFO)
 
 
 def load_class(clsname):
@@ -18,15 +22,15 @@ def load_class(clsname):
             components = clsname.split(".")
             pkg = ".".join(components[:-1])
             cls = components[-1]
-            print("loading package {}".format(pkg))
+            logging.info("loading package {}".format(pkg))
             p = import_module(pkg)
-            print("loading class {}".format(cls))
+            logging.info("loading class {}".format(cls))
             return getattr(p, cls)
         else:
-            print("direct loading {}".format(cls))
+            logging.info("direct loading {}".format(cls))
             return globals()[clsname]
     except AttributeError or KeyError:
-        print("Error! Could not load class {}".format(clsname))
+        logging.fatal("Error! Could not load class {}".format(clsname))
         sys.exit(-1)
 
 
@@ -34,9 +38,10 @@ def main(_):
     # Load and initialize the model
     model_class = load_class(tf.flags.FLAGS.model)
     if not issubclass(model_class, SquadModel):
-        print("Error! Given model {} is not an instance of core.SquadModel.".format(tf.flags.FLAGS.model))
+        logging.fatal("Error! Given model {} is not an instance of core.SquadModel.".format(tf.flags.FLAGS.model))
         sys.exit(-1)
 
+    # Configure the model and build the graph
     config = Config(dict(
         max_length=tf.flags.FLAGS.max_length,
         keep_prob=tf.flags.FLAGS.keep_prob,
@@ -46,29 +51,52 @@ def main(_):
         cell_type=tf.flags.FLAGS.cell_type,
     ))
     model = model_class()
-    model.initialize(config)
+    model.initialize_graph(config)
 
-    for epoch in tqdm.trange(tf.flags.FLAGS.epochs):
-        if epoch % tf.flags.FLAGS.checkpoint_freq == 0:
-            # Perform evaluation on the smaller dev set.
-            model.checkpoint(tf.flags.FLAGS.save_dir)
+    # Create a stupid batch of size 3 just for testing
+    # All questions have length 10 and all passages have length 90 to be realistic
+    stupid_question_batch = np.random.normal(size=(config.batch_size, 10, config.embedding_size))
+    stupid_passage_batch = np.random.normal(size=(config.batch_size, 90, config.embedding_size))
+    stupid_answer_batch = np.ones(shape=(config.batch_size, 90))
+
+    with tf.Session().as_default() as sess:
+        sess.run(tf.global_variables_initializer())
+        for epoch in range(tf.flags.FLAGS.epochs):
+
+            # Read a random batch of data
+            # Store all of the training set in memory (yikes?)
+
+            bar = tqdm(range(30), unit=" minibatch")
+            for _ in bar:
+                loss = model.train_batch(stupid_question_batch,
+                                         stupid_passage_batch,
+                                         stupid_answer_batch)
+                fmt_loss = "{:.6f}".format(loss)
+                bar.set_postfix(loss=fmt_loss)
+
+            logging.info("epoch={:03d} loss={}".format(epoch, loss))
+
+            if epoch % tf.flags.FLAGS.checkpoint_freq == 0:
+                # Perform evaluation on the smaller dev set.
+                model.checkpoint(tf.flags.FLAGS.save_dir)
 
 
 if __name__ == '__main__':
-
     # Setup arguments
     tf.flags.DEFINE_string("model", "models.baseline.BaselineModel", "full Python package path to a SquadModel")
     tf.flags.DEFINE_string("cell_type", "lstm", "type of RNN cell for training (either 'lstm' or 'gru'")
 
     tf.flags.DEFINE_integer("epochs", 50, "number of epochs of training")
     tf.flags.DEFINE_integer("checkpoint_freq", 1, "epochs of training between re-evaluating and saving model")
-    tf.flags.DEFINE_integer("max_length", 250, "Maximum length of sentences (in tokens)")
-    tf.flags.DEFINE_integer("hidden_size", 150, "Size of the hidden state for the RNN cell")
+    tf.flags.DEFINE_integer("max_length", 250, "maximum length of sentences (in tokens)")
+    tf.flags.DEFINE_integer("hidden_size", 20, "size of the hidden state for the RNN cell")
     tf.flags.DEFINE_integer("embed_size", 100, "dimensionality of embedding")
+    tf.flags.DEFINE_integer("batch_size", 30, "size of minibatches")
 
     tf.flags.DEFINE_float("keep_prob", 0.99, "inverse of drop probability")
 
     tf.flags.DEFINE_string("save_dir", "save", "path to save training results and model checkpoints")
     tf.flags.DEFINE_string("embed_path", "data/squad/glove.trimmed.100.npz", "path to npz file holding word embeddings")
 
+    # Execute main() above, see tf.app documentation for details.
     tf.app.run()

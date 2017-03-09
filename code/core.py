@@ -1,9 +1,13 @@
+import tensorflow as tf
+
+
 class Config(object):
     """
     Configuration file with sane defaults
     """
 
     def __init__(self, options):
+        self.batch_size = options.get("batch_size", 3)
         self.max_length = options.get("max_length", 100)
         self.keep_prob = options.get("keep_prob", 0.99)
         self.num_classes = options.get("num_classes", 2)
@@ -22,7 +26,7 @@ class SquadModel(object):
     word embedding features which can be processed by a fancy RNN-style algo.
     """
 
-    def initialize(self, config):
+    def initialize_graph(self, config):
         """
         Initialize the model based off the given configuration
         :param config: An instance of Config with important information for configuring.
@@ -30,16 +34,10 @@ class SquadModel(object):
         """
         raise NotImplementedError("Abstract method")
 
-    def train_batch(self, sess, question_ids, passage_ids, answer_start, answer_end):
+    def train_batch(self, question_batch, passage_batch, answer_batch, sess=tf.get_default_session()):
         """
-        Train on a set of data of a fixed size. All the parameters have the same length
-
-        :param sess: tf.Session to run in
-        :param question_ids: A list of lists of token IDs representing the question for each batch member
-        :param passage_ids: A list of lists of token IDs representing the passage for each batch member
-        :param answer_start: The index of the first token in the answer within the passage
-        :param answer_end: The index of the last token of the answer within the passage
-        :return: Nothing
+        Train on a set of data of a fixed size. All the parameters have the same first dimension (batch_size),
+        passage_ids and answer_batch have same 2nd dimension as well.
         """
         raise NotImplementedError("Abstract method")
 

@@ -2,17 +2,10 @@ import tensorflow as tf
 from tensorflow import nn
 from tensorflow.contrib import rnn
 
-from core import SquadModel, EncoderDecoderModel
+from core import SquadModel
 
 
-"""
-P: He died on January 7, 1995 in a winter car crash
-Q: When did he die?
-A: "died January 7, 1995 winter" etc.
-"""
-
-
-class BaselineModel(SquadModel, EncoderDecoderModel):
+class BaselineModel(SquadModel):
     """
     BiLSTM SQuAD model, simple baseline.
     """
@@ -22,86 +15,68 @@ class BaselineModel(SquadModel, EncoderDecoderModel):
         self._question_placeholder = None
         self._passage_placeholder = None
         self._answer_placeholder = None
-        self._range = None
         self._cell = None
-        self._loss_op = None
+        self._loss = None
+        self._train_step = None
 
-    def initialize(self, config):
-        self._question_placeholder = tf.placeholder(tf.float32, [None, None, config.embedding_size],
+    def initialize_graph(self, config):
+        # Setup placeholders
+        self._question_placeholder = tf.placeholder(tf.float32, [config.batch_size, None, config.embedding_size],
                                                     "question_embedded_batch")
-        self._passage_placeholder = tf.placeholder(tf.float32, [None, None, config.embedding_size],
+        self._passage_placeholder = tf.placeholder(tf.float32, [config.batch_size, None, config.embedding_size],
                                                    "passage_embedded_batch")
-        self._answer_placeholder = tf.placeholder(tf.int32, [None, None, config.embedding_size], "answer_batch")
-        self._range = tf.placeholder(tf.float32, [None, 2], "answer_range_batch")
+        self._answer_placeholder = tf.placeholder(tf.int32, [config.batch_size, None],
+                                                  "answer_batch")
 
-        cell = rnn.LSTMCell if config.cell_type == "lstm" else rnn.GRUCell
-        self._cell = cell(config.hidden_size)
+        if config.cell_type == "lstm":
+            cell = rnn.LSTMCell(config.hidden_size)
+        elif config.cell_type == "gru":
+            cell = rnn.GRUCell(config.hidden_size)
+        else:
+            raise ValueError("Invalid cell_type {}".format(config.cell_type))
 
-        # Encode the question and passage, returns hidden states h_q, h_p and a set of the intermediate
-        # hidden states output for each timestep.
-        h_q, h_p, q_outs, p_outs = self.encode(self._question_placeholder, self._passage_placeholder)
+        # Setup the computation - We want to run both the question and the passage through a simple LSTM,
+        # then concatenate, run through another LSTM, get a bunch of outputs. This is great.
 
-        h = tf.concat([h_q, h_p], 2)
+        # Encode the question
+        with tf.variable_scope("question_rnn"):
+            _, h_q = nn.dynamic_rnn(cell, self._question_placeholder, dtype=tf.float32)
+        with tf.variable_scope("passage_rnn"):
+            h_p, _ = nn.dynamic_rnn(cell, self._passage_placeholder, initial_state=h_q)
 
-        # Run through a new LSTM that has two hidden outputs
-        last_cell = rnn.LSTMCell(2)
-        states, _ = nn.dynamic_rnn(last_cell, h)
-        best_states = tf.ones_like(states, tf.float32)
+        with tf.variable_scope("seq_classifier"):
+            classifier_cell = rnn.LSTMCell(2)
+            classes, _ = nn.dynamic_rnn(classifier_cell, h_p, dtype=tf.float32)
 
-        # Cross entropy with logits, no need to softmax directly
-        loss = nn.softmax_cross_entropy_with_logits(best_states, states)
+        # Perform a classifiction for each token individually
+        losses = nn.sparse_softmax_cross_entropy_with_logits(labels=self._answer_placeholder, logits=classes)
+        self._loss = tf.reduce_mean(losses)
         optimizer = tf.train.AdamOptimizer(learning_rate=0.01)
 
-        self._loss_op = optimizer.minimize(loss)
+        # Save the CE loss minimization step for later
+        self._train_step = optimizer.minimize(self._loss)
 
-    def encode(self, question_batch, paragraph_batch):
-
-        question_batch = tf.cast(question_batch, tf.float32)
-        paragraph_batch = tf.cast(paragraph_batch, tf.float32)
-
-        # Encode the question first
-        # h_q and h_p are tuples of the form (hidden_state_forward, hidden_state_backward).
-        # We stack them vertically to form our "final" hidden states.
-        print("cell", self._cell)
-        q_outs, h_q = nn.bidirectional_dynamic_rnn(
-            self._cell, self._cell, question_batch, dtype=tf.float32,
-            sequence_length=[100 for _ in range(100)])
-        h_q = tf.concat(h_q, 2)
-        p_outs, h_p = nn.bidirectional_dynamic_rnn(
-            self._cell, self._cell, paragraph_batch, initial_state_fw=h_q,
-            sequence_length=[100 for _ in range(100)])
-        h_p = tf.concat(h_p, 2)
-
-        # Same for our intermediate outputs
-        q_outs = tf.concat(q_outs, 2)
-        p_outs = tf.concat(p_outs, 2)
-
-        # Return ALL THE THINGS!
-        return h_q, h_p, q_outs, p_outs
-
-    def decode(self, h_q, h_p, attention):
+    def train_batch(self, question_batch, passage_batch, answer_batch, sess=None):
         """
-        Take the two, calculates the attention vector, etc.
+        TODO: replace feed_dict with whatever is supposed to be more efficient
+        Link: https://www.tensorflow.org/programmers_guide/reading_data
         """
-        # THIS DOES NOTHING HOORAY
-        pass
 
-    def train_batch(self, sess, question_ids, passage_ids, answer_start, answer_end):
-        # Construct a tensor that is 1 for positions that is between answer_start and answer_end
-        answer_batch = tf.zeros_like(passage_ids)
+        if sess is None:
+            sess = tf.get_default_session()
 
         feed_dict = {
-            self._question_placeholder: question_ids,
-            self._passage_placeholder: passage_ids,
+            self._question_placeholder: question_batch,
+            self._passage_placeholder: passage_batch,
             self._answer_placeholder: answer_batch,
         }
 
-        loss = sess.run([self._loss_op], feed_dict=feed_dict)
-
+        _, loss = sess.run([self._train_step, self._loss], feed_dict=feed_dict)
+        return loss
 
     def predict(self, question_ids, passage_ids):
         """
-        Runs the neural network in a forward pass to predict tokens.
+        Fill this in to perform evaluation
         :param question_ids:
         :param passage_ids:
         :return:

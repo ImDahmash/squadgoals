@@ -27,3 +27,12 @@ def load_glove():
         return np.load("data/squad/glove.trimmed.100.npz")["glove"]
     except IOError as e:
         print("Error loading GloVe data: {}".format(e))
+
+
+def load_batch():
+    """
+    Returns a batch of the given size of the dataset.
+    """
+
+    # TODO: this
+    pass
