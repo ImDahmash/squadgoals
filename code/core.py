@@ -1,33 +1,15 @@
-from functools import wraps
-
-
-def abstractmethod(f):
-    """
-    Marks the provided method as abstract, raising an error if not overridden.
-    """
-    @wraps(f)
-    def inner(*args, **kwargs):
-        cname = args[0].__class__.__name__  # Grab value of `self` at time of call
-        raise NotImplementedError("Method {}.{} not implemented!".format(cname, f.__name__))
-    return inner
-
-
 class Config(object):
     """
     Configuration file with sane defaults
     """
 
     def __init__(self, options):
-        self._max_length = options.get("max_length", 100)
-        self._keep_prob = options.get("keep_prob", 0.99)
-
-    @property
-    def max_length(self):
-        return self._max_length
-
-    @property
-    def keep_prob(self):
-        return self._keep_prob
+        self.max_length = options.get("max_length", 100)
+        self.keep_prob = options.get("keep_prob", 0.99)
+        self.num_classes = options.get("num_classes", 2)
+        self.embedding_size = options.get("embedding_size", 100)
+        self.hidden_size = options.get("hidden_size", 150)
+        self.cell_type = options.get("cell_type", "lstm")
 
 
 class SquadModel(object):
@@ -40,30 +22,27 @@ class SquadModel(object):
     word embedding features which can be processed by a fancy RNN-style algo.
     """
 
-    @abstractmethod
     def initialize(self, config):
         """
         Initialize the model based off the given configuration
         :param config: An instance of Config with important information for configuring.
         :return: None
         """
-        pass
+        raise NotImplementedError("Abstract method")
 
-    @abstractmethod
-    def train_batch(self, question_ids, passage_ids, answer_ids, answer_start, answer_end):
+    def train_batch(self, sess, question_ids, passage_ids, answer_start, answer_end):
         """
         Train on a set of data of a fixed size. All the parameters have the same length
 
+        :param sess: tf.Session to run in
         :param question_ids: A list of lists of token IDs representing the question for each batch member
         :param passage_ids: A list of lists of token IDs representing the passage for each batch member
-        :param answer_ids: A list of lists of token IDs representing the vocabulary ID of each token in the answer
         :param answer_start: The index of the first token in the answer within the passage
         :param answer_end: The index of the last token of the answer within the passage
         :return: Nothing
         """
-        pass
+        raise NotImplementedError("Abstract method")
 
-    @abstractmethod
     def predict(self, question_ids, passage_ids):
         """
         Ask the model to perform predictions about the given set of things
@@ -71,4 +50,37 @@ class SquadModel(object):
         :param passage_ids: A list of lists of token IDs representing the passage for each batch member
         :return: A list of the form [(answer_start, answer_end)] for each item in the batch indicating the answers
         """
+        raise NotImplementedError("Abstract method")
+
+    def checkpoint(self, save_dir):
+        """
+        Save the current set of parameters to disk.
+        :param save_dir: Path to the directory where saved parameters are written.
+        :return: Nothing.
+        """
         pass
+
+
+class EncoderDecoderModel(object):
+    """
+    Model for objects which contain an explicit encode and decode step.
+    """
+
+    def encode(self, paragraph_batch, question_batch):
+        """
+        Encodes the paragraph and question batches into a set of hidden states.
+        :param paragraph_batch: A Tensor of dimension [batch_size, None, embedding_size] holding paragraph wordvectors
+        :param question_batch: A Tensor of dimension [batch_size, None, embedding_size] holding question wordvectors
+        :return:
+        """
+        raise NotImplementedError("Abstract method")
+
+    def decode(self, h_q, h_p, attention):
+        """
+        Decodes the hidden state as well as the attention vector into a prediction.
+        :param h_q: Abstract representation of question (shape `[batch_size, max_length, 2*hidden_size]`)
+        :param h_p: Abstract representation of paragraph (shape `[batch_size, max_length, 2*hidden_size]`)
+        :param attention: Matrix representing a function of attention to the paragraph.
+        :return: The predicted span (start_index, end_index)
+        """
+        raise NotImplementedError("Abstract method")
