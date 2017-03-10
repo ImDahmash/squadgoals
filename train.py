@@ -1,10 +1,11 @@
 import logging
-import sys
 import math
+import sys
 from importlib import import_module
 
 import numpy as np
 import tensorflow as tf
+from tensorflow.python.platform import gfile
 from tqdm import tqdm
 
 from core import Config, SquadModel
@@ -64,6 +65,10 @@ def main(_):
     num_training_examples = context.shape[0]
     batch_size = tf.flags.FLAGS.batch_size
     num_batches = math.ceil(num_training_examples / batch_size)
+
+    # Create save_dir for checkpointing if it does not already exist
+    if not gfile.Exists(tf.flags.FLAGS.save_dir):
+        gfile.MakeDirs(tf.flags.FLAGS.save_dir)
 
     with tf.Session().as_default() as sess:
         sess.run(tf.global_variables_initializer())

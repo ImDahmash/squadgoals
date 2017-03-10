@@ -51,7 +51,7 @@ class SquadModel(object):
         """
         raise NotImplementedError("Abstract method")
 
-    def checkpoint(self, save_dir):
+    def checkpoint(self, save_dir, sess=None):
         """
         Save the current set of parameters to disk.
         :param save_dir: Path to the directory where saved parameters are written.

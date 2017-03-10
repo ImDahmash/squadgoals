@@ -135,7 +135,7 @@ def tokens_to_glove(source_file, glove_mat, word_to_id, max_len=None, useindexes
     processed = np.zeros((num_examples, longest, glove_mat.shape[1]))
 
     logging.info("Building the unrolled np array...")
-    for i, sequence in tqdm(enumerate(sequences)):
+    for i, sequence in enumerate(tqdm(sequences)):
         for t, vec in enumerate(sequence):
             processed[i, 0:lengths[i], :] = vec
 

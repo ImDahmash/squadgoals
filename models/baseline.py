@@ -88,9 +88,10 @@ class BaselineModel(SquadModel):
         """
         pass
 
-    def checkpoint(self, sess=None):
+    def checkpoint(self, save_dir, sess=None):
         if sess is None:
             sess = tf.get_default_session()
+
         save_file = pjoin(self._model_output, "model.weights")
         saver = tf.train.Saver()
         saver.save(sess, save_file)
