@@ -35,18 +35,23 @@ class SquadModel(object):
         """
         raise NotImplementedError("Abstract method")
 
-    def train_batch(self, question_batch, passage_batch, answer_batch, sess=tf.get_default_session()):
+    def train_batch(self, question_batch, passage_batch, answer_batch, sess=None):
         """
         Train on a set of data of a fixed size. All the parameters have the same first dimension (batch_size),
         passage_ids and answer_batch have same 2nd dimension as well.
+        :param question_batch: Batch of questions
+        :param passage_batch: Batch of contexts
+        :param answer_batch: Batch of answers with the same first two shape components as passage_batch
+        :param sess: Optional tf.Session for evaluation
         """
         raise NotImplementedError("Abstract method")
 
-    def predict(self, question_ids, passage_ids):
+    def predict(self, question_ids, passage_ids, sess=None):
         """
         Ask the model to perform predictions about the given set of things
         :param question_ids: A list of lists of token IDs representing the question for each batch member
         :param passage_ids: A list of lists of token IDs representing the passage for each batch member
+        :param sess: Optional tf.Session used for evaluation
         :return: A list of the form [(answer_start, answer_end)] for each item in the batch indicating the answers
         """
         raise NotImplementedError("Abstract method")
@@ -54,7 +59,8 @@ class SquadModel(object):
     def checkpoint(self, save_dir, sess=None):
         """
         Save the current set of parameters to disk.
-        :param save_dir: Path to the directory where saved parameters are written.
+        :param save_dir: Path to the directory where saved parameters are written
+        :param sess: Optional tf.Session used for evaluation
         :return: Nothing.
         """
         raise NotImplementedError("Abstract method")

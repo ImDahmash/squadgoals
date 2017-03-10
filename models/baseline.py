@@ -21,6 +21,7 @@ class BaselineModel(SquadModel):
         self._loss = None
         self._train_step = None
         self._model_output = None
+        self._preds = None
 
     def initialize_graph(self, config):
         self._question_placeholder = tf.placeholder(tf.float32, [None, None, config.embed_size], "question_embedded")
@@ -50,10 +51,10 @@ class BaselineModel(SquadModel):
 
         with tf.variable_scope("seq_classifier"):
             classifier_cell = rnn.LSTMCell(2)
-            classes, _ = nn.dynamic_rnn(classifier_cell, h_p, dtype=tf.float32)
+            self._preds, _ = nn.dynamic_rnn(classifier_cell, h_p, dtype=tf.float32)
 
-        # Perform a classifiction for each token individually
-        losses = nn.sparse_softmax_cross_entropy_with_logits(labels=self._answer_placeholder, logits=classes)
+        # Perform a classification for each token individually
+        losses = nn.sparse_softmax_cross_entropy_with_logits(labels=self._answer_placeholder, logits=self._preds)
         self._loss = tf.reduce_mean(losses)
         optimizer = tf.train.AdamOptimizer(learning_rate=0.01)
 
@@ -69,24 +70,28 @@ class BaselineModel(SquadModel):
         if sess is None:
             sess = tf.get_default_session()
 
-        feed_dict = {
+        feeds = {
             self._question_placeholder: question_batch,
             self._passage_placeholder: passage_batch,
             self._answer_placeholder: answer_batch,
         }
 
-        _, loss = sess.run([self._train_step, self._loss], feed_dict=feed_dict)
+        _, loss = sess.run([self._train_step, self._loss], feed_dict=feeds)
         return loss
 
-    def predict(self, question_ids, passage_ids):
+    def predict(self, question_batch, passage_batch, sess=None):
         """
         Predicts the (start, end) span representing the answer for the given question over the given passage.
-        :param question_ids:
-        :param passage_ids:
-        :return: A tuple (start_idx, end_idx) that indicates the start and end of the answer zero-indexed
-                 relative to the passage.
         """
-        pass
+        if sess is None:
+            sess = tf.get_default_session()
+
+        feeds = {
+            self._question_placeholder: question_batch,
+            self._passage_placeholder: passage_batch,
+        }
+
+        return sess.run(self._preds, feed_dict=feeds)
 
     def checkpoint(self, save_dir, sess=None):
         if sess is None:
