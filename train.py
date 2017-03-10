@@ -53,6 +53,11 @@ def train_model(model):
 
     with tf.Session().as_default() as sess:
         sess.run(tf.global_variables_initializer())
+
+        params = tf.trainable_variables()
+        num_params = sum(map(lambda t: np.prod(tf.shape(t.value()).eval()), params))
+        logging.info("Number of trainable parameters: {}".format(num_params))
+
         for epoch in range(tf.flags.FLAGS.epochs):
 
             # Read a random batch of data
@@ -62,7 +67,7 @@ def train_model(model):
 
             # We want to return a set of indexes
             batches = tqdm(minibatch_index_iterator(num_training_examples, batch_size), unit="batch", total=num_batches)
-            loss = None
+            losses = []
             for batch_idxs in batches:
                 question_batch = question[batch_idxs]
                 context_batch = context[batch_idxs]
@@ -71,9 +76,13 @@ def train_model(model):
                 loss = model.train_batch(question_batch,
                                          context_batch,
                                          answer_batch)
+                losses.append(loss)
                 fmt_loss = "{:.6f}".format(loss)
-                batches.set_postfix(loss=fmt_loss)
+                avg_loss = np.sum(losses) / len(losses)
+                fmt_avg_loss = "{:.6f}".format(avg_loss)
+                batches.set_postfix(loss=fmt_loss, avg=fmt_avg_loss)
 
+            loss = np.sum(losses) / len(losses)
             logging.info("epoch={:03d} loss={}".format(epoch_num, loss))
 
             if epoch % tf.flags.FLAGS.checkpoint_freq == 0:
@@ -91,21 +100,19 @@ def eval_model(model):
         answer = eval_data["answer"]
         num_training_examples = context.shape[0]
         batch_size = tf.flags.FLAGS.batch_size
-        num_batches = math.ceil(num_training_examples / batch_size)
 
         # Create save_dir for checkpointing if it does not already exist
         if not gfile.Exists(tf.flags.FLAGS.save_dir):
             gfile.MakeDirs(tf.flags.FLAGS.save_dir)
 
-        with tf.Session().as_default() as sess:
-            sess.run(tf.global_variables_initializer())
-            batches = minibatch_index_iterator(num_training_examples, batch_size)
-            for batch_idxs in batches:
-                question_batch = question[batch_idxs]
-                context_batch = context[batch_idxs]
-                answer_batch = answer[batch_idxs]
-                loss = model.predict(question_batch, context_batch, answer_batch)
-                logging.info("loss: {}".format(loss))
+        sess.run(tf.global_variables_initializer())
+        batches = minibatch_index_iterator(num_training_examples, batch_size)
+        for batch_idxs in batches:
+            question_batch = question[batch_idxs]
+            context_batch = context[batch_idxs]
+            answer_batch = answer[batch_idxs]
+            loss = model.predict(question_batch, context_batch, answer_batch)
+            logging.info("loss: {}".format(loss))
 
 
 def main(_):

@@ -1,12 +1,13 @@
 import logging
 from os.path import join as pjoin
-logging.getLogger().setLevel(logging.INFO)
 
 import tensorflow as tf
 from tensorflow import nn
 from tensorflow.contrib import rnn
 
 from core import SquadModel
+
+logging.getLogger().setLevel(logging.INFO)
 
 
 class BaselineModel(SquadModel):
@@ -33,9 +34,9 @@ class BaselineModel(SquadModel):
         self._model_output = config.save_dir
 
         if config.cell_type == "lstm":
-            cell = rnn.LSTMCell(config.hidden_size)
+            cell = rnn.MultiRNNCell([rnn.LSTMCell(config.hidden_size)] * 2)
         elif config.cell_type == "gru":
-            cell = rnn.GRUCell(config.hidden_size)
+            cell = rnn.MultiRNNCell([rnn.GRUCell(config.hidden_size)] * 2)
         else:
             raise ValueError("Invalid cell_type {}".format(config.cell_type))
 
@@ -58,10 +59,7 @@ class BaselineModel(SquadModel):
         # Perform a classification for each token individually
         losses = nn.sparse_softmax_cross_entropy_with_logits(labels=self._answer_placeholder, logits=self._preds)
         self._loss = tf.reduce_mean(losses)
-        optimizer = tf.train.AdamOptimizer(learning_rate=0.01)
-
-        # Save the CE loss minimization step for later
-        self._train_step = optimizer.minimize(self._loss)
+        self._train_step = tf.train.AdamOptimizer(learning_rate=0.01).minimize(self._loss)
 
     def train_batch(self, question_batch, passage_batch, answer_batch, sess=None):
         """
