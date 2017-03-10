@@ -37,28 +37,9 @@ def load_class(clsname):
         sys.exit(-1)
 
 
-def main(_):
-    # Load and initialize the model
-    model_class = load_class(tf.flags.FLAGS.model)
-    if not issubclass(model_class, SquadModel):
-        logging.fatal("Error! Given model {} is not an instance of core.SquadModel.".format(tf.flags.FLAGS.model))
-        sys.exit(-1)
-
-    # Configure the model and build the graph
-    config = Config(dict(
-        max_length=tf.flags.FLAGS.max_length,
-        keep_prob=tf.flags.FLAGS.keep_prob,
-        num_classes=2,
-        embed_size=tf.flags.FLAGS.embed_size,
-        hidden_size=tf.flags.FLAGS.hidden_size,
-        cell_type=tf.flags.FLAGS.cell_type,
-        save_dir=tf.flags.FLAGS.save_dir
-    ))
-    model = model_class()
-    model.initialize_graph(config)
-
+def train_model(model):
     logging.info("Loading training data...")
-    train_data = np.load(tf.flags.FLAGS.train_path)
+    train_data = np.load(tf.flags.FLAGS.data_path)
     question = train_data["question"]
     context = train_data["context"]
     answer = train_data["answer"]
@@ -81,6 +62,7 @@ def main(_):
 
             # We want to return a set of indexes
             batches = tqdm(minibatch_index_iterator(num_training_examples, batch_size), unit="batch", total=num_batches)
+            loss = None
             for batch_idxs in batches:
                 question_batch = question[batch_idxs]
                 context_batch = context[batch_idxs]
@@ -99,21 +81,78 @@ def main(_):
                 model.checkpoint(tf.flags.FLAGS.save_dir)
 
 
+def eval_model(model):
+    with tf.Session().as_default() as sess:
+        model.restore_from_checkpoint(tf.flags.FLAGS.save_dir)
+        logging.info("Loading training data...")
+        eval_data = np.load(tf.flags.FLAGS.data_path)
+        question = eval_data["question"]
+        context = eval_data["context"]
+        answer = eval_data["answer"]
+        num_training_examples = context.shape[0]
+        batch_size = tf.flags.FLAGS.batch_size
+        num_batches = math.ceil(num_training_examples / batch_size)
+
+        # Create save_dir for checkpointing if it does not already exist
+        if not gfile.Exists(tf.flags.FLAGS.save_dir):
+            gfile.MakeDirs(tf.flags.FLAGS.save_dir)
+
+        with tf.Session().as_default() as sess:
+            sess.run(tf.global_variables_initializer())
+            batches = minibatch_index_iterator(num_training_examples, batch_size)
+            for batch_idxs in batches:
+                question_batch = question[batch_idxs]
+                context_batch = context[batch_idxs]
+                answer_batch = answer[batch_idxs]
+                loss = model.predict(question_batch, context_batch, answer_batch)
+                logging.info("loss: {}".format(loss))
+
+
+def main(_):
+    # Load and initialize the model
+    model_class = load_class(tf.flags.FLAGS.model)
+    if not issubclass(model_class, SquadModel):
+        logging.fatal("Error! Given model {} is not an instance of core.SquadModel.".format(tf.flags.FLAGS.model))
+        sys.exit(-1)
+
+    # Configure the model and build the graph
+    config = Config(dict(
+        max_length=tf.flags.FLAGS.max_length,
+        keep_prob=tf.flags.FLAGS.keep_prob,
+        num_classes=2,
+        embed_size=tf.flags.FLAGS.embed_size,
+        hidden_size=tf.flags.FLAGS.hidden_size,
+        cell_type=tf.flags.FLAGS.cell_type,
+        save_dir=tf.flags.FLAGS.save_dir
+    ))
+    model = model_class()
+    model.initialize_graph(config)
+
+    mode = tf.flags.FLAGS.mode
+
+    if mode == "train":
+        train_model(model)
+    elif mode == "eval":
+        eval_model(model)
+
+
 if __name__ == '__main__':
     # Setup arguments
+    tf.flags.DEFINE_string("mode", "train", "Mode to run in, either \"train\" or \"eval\"")
     tf.flags.DEFINE_string("model", "models.baseline.BaselineModel", "full Python package path to a SquadModel")
     tf.flags.DEFINE_string("cell_type", "lstm", "type of RNN cell for training (either 'lstm' or 'gru'")
 
+    # Training flags
     tf.flags.DEFINE_integer("epochs", 50, "number of epochs of training")
     tf.flags.DEFINE_integer("checkpoint_freq", 1, "epochs of training between re-evaluating and saving model")
-    tf.flags.DEFINE_integer("max_length", 250, "maximum length of sentences (in tokens)")
+    tf.flags.DEFINE_integer("max_length", 250, "maximum length of context passages (in tokens)")
     tf.flags.DEFINE_integer("hidden_size", 20, "size of the hidden state for the RNN cell")
     tf.flags.DEFINE_integer("embed_size", 100, "dimensionality of embedding")
     tf.flags.DEFINE_integer("batch_size", 30, "size of minibatches")
 
     tf.flags.DEFINE_float("keep_prob", 0.99, "inverse of drop probability")
 
-    tf.flags.DEFINE_string("train_path", "data/squad/train.npz", "Path to a .npz file that holds the training matrices")
+    tf.flags.DEFINE_string("data_path", "data/squad/train.npz", "Path to .npz file holding the eval/training matrices")
     tf.flags.DEFINE_string("save_dir", "save", "path to save training results and model checkpoints")
     tf.flags.DEFINE_string("embed_path", "data/squad/glove.trimmed.100.npz", "path to npz file holding word embeddings")
 

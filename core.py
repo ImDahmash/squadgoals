@@ -46,11 +46,12 @@ class SquadModel(object):
         """
         raise NotImplementedError("Abstract method")
 
-    def predict(self, question_ids, passage_ids, sess=None):
+    def predict(self, question_batch, passage_batch, answer_batch, sess=None):
         """
         Ask the model to perform predictions about the given set of things
-        :param question_ids: A list of lists of token IDs representing the question for each batch member
-        :param passage_ids: A list of lists of token IDs representing the passage for each batch member
+        :param question_batch: A list of lists of token IDs representing the question for each batch member
+        :param passage_batch: A list of lists of token IDs representing the passage for each batch member
+        :param answer_batch: Batch of answers with the same first two shape components as passage_batch
         :param sess: Optional tf.Session used for evaluation
         :return: A list of the form [(answer_start, answer_end)] for each item in the batch indicating the answers
         """
@@ -60,6 +61,15 @@ class SquadModel(object):
         """
         Save the current set of parameters to disk.
         :param save_dir: Path to the directory where saved parameters are written
+        :param sess: Optional tf.Session used for evaluation
+        :return: Nothing.
+        """
+        raise NotImplementedError("Abstract method")
+
+    def restore_from_checkpoint(self, save_dir, sess=None):
+        """
+        Restore the graph from the latest checkpoint in the given save_dir
+        :param save_dir: Location where checkpoint files are saved
         :param sess: Optional tf.Session used for evaluation
         :return: Nothing.
         """

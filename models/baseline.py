@@ -1,4 +1,6 @@
+import logging
 from os.path import join as pjoin
+logging.getLogger().setLevel(logging.INFO)
 
 import tensorflow as tf
 from tensorflow import nn
@@ -79,7 +81,7 @@ class BaselineModel(SquadModel):
         _, loss = sess.run([self._train_step, self._loss], feed_dict=feeds)
         return loss
 
-    def predict(self, question_batch, passage_batch, sess=None):
+    def predict(self, question_batch, passage_batch, answer_batch, sess=None):
         """
         Predicts the (start, end) span representing the answer for the given question over the given passage.
         """
@@ -89,9 +91,10 @@ class BaselineModel(SquadModel):
         feeds = {
             self._question_placeholder: question_batch,
             self._passage_placeholder: passage_batch,
+            self._answer_placeholder: answer_batch,
         }
 
-        return sess.run(self._preds, feed_dict=feeds)
+        return sess.run(self._loss, feed_dict=feeds)
 
     def checkpoint(self, save_dir, sess=None):
         if sess is None:
@@ -100,3 +103,12 @@ class BaselineModel(SquadModel):
         save_file = pjoin(self._model_output, "model.weights")
         saver = tf.train.Saver()
         saver.save(sess, save_file)
+
+    def restore_from_checkpoint(self, save_dir, sess=None):
+        if sess is None:
+            sess = tf.get_default_session()
+
+        restorer = tf.train.Saver()
+        save_path = tf.train.latest_checkpoint(save_dir)
+        logging.info("Restoring from {}".format(save_path))
+        restorer.restore(sess, save_path)
