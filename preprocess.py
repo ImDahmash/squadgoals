@@ -58,7 +58,7 @@ def build_vocabulary(corpus, dest):
             for line in tqdm(fh):
                 for token in basic_tokenizer(line):
                     # if len(token) == 1:
-                        # print("one-char token {}".format(token))
+                    # print("one-char token {}".format(token))
                     word_and_freq[token] += 1
 
     ordered_vocab = list(map(lambda t: t[0], word_and_freq.most_common()))
@@ -160,7 +160,7 @@ def build_dataset(prefix, id_to_word, word_to_id, glove_vectors, squad_root):
                 shifted_index = ind.index(i)
                 start, end = line.split()
                 start, end = int(start), int(end)
-                answer[shifted_index, start:end+1] = 1
+                answer[shifted_index, start:end + 1] = 1
 
     # Write out the correct thing
     output_path = pjoin(squad_root, prefix + ".npz")

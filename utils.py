@@ -19,7 +19,7 @@ def try_jitted_session(**kwargs):
         config.graph_options.optimizer_options.global_jit_level = tf.OptimizerOptions.ON_1
         return tf.Session(config=config)
     else:
-        return tf.Session(**kwargs)
+        return tf.Session( ** kwargs)
 
 
 def load_glove():
@@ -35,4 +35,4 @@ def minibatch_index_iterator(total_size, batch_size):
     """
     order = np.random.permutation(total_size)
     for i in range(0, order.shape[0], batch_size):
-        yield order[i:i+batch_size]
+        yield order[i:i + batch_size]

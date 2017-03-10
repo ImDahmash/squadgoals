@@ -74,4 +74,3 @@ class SquadModel(object):
         :return: Nothing.
         """
         raise NotImplementedError("Abstract method")
-
