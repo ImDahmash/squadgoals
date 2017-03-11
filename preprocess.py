@@ -47,7 +47,7 @@ def build_vocabulary(corpus, dest):
         # Load the file
         with gfile.GFile(dest, "r") as vocab_file:
             logging.info("Loading pre-built vocabulary from {}".format(dest))
-            id_to_word = vocab_file.readlines()
+            id_to_word = [l.strip() for l in vocab_file.readlines()]
             word_to_id = dict([(word, i) for i, word in enumerate(id_to_word)])
             return id_to_word, word_to_id
 
@@ -57,8 +57,6 @@ def build_vocabulary(corpus, dest):
         with gfile.GFile(document, "r") as fh:
             for line in tqdm(fh):
                 for token in basic_tokenizer(line):
-                    # if len(token) == 1:
-                    # print("one-char token {}".format(token))
                     word_and_freq[token] += 1
 
     ordered_vocab = list(map(lambda t: t[0], word_and_freq.most_common()))
@@ -135,7 +133,7 @@ def tokens_to_ids(source_file, word_to_id, max_len=None, useindexes=None):
             tokens = basic_tokenizer(line)
 
             for token in tokens:
-                token_id = word_to_id[token] if token in word_to_id else UNK_ID
+                token_id = word_to_id.get(token, UNK_ID)
                 seq.append(token_id)
 
             if max_len is not None and len(seq) > max_len:

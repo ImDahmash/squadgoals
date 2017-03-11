@@ -1,18 +1,12 @@
 class Config(object):
     """
-    Configuration file with sane defaults
+    Simple way to wrap a dict to allow accessing using attribute notation.
     """
+    def __init__(self, d):
+        self.d = d
 
-    def __init__(self, options):
-        self.batch_size = options.get("batch_size", 3)
-        self.max_length = options.get("max_length", 100)
-        self.keep_prob = options.get("keep_prob", 0.99)
-        self.num_classes = options.get("num_classes", 2)
-        self.embed_size = options.get("embed_size", 100)
-        self.hidden_size = options.get("hidden_size", 150)
-        self.cell_type = options.get("cell_type", "lstm")
-        self.save_dir = options.get("save_dir", "save")
-
+    def __getattr__(self, name):
+        return self.d[name]
 
 class SquadModel(object):
     """
