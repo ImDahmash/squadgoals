@@ -73,8 +73,11 @@ def build_vocabulary(corpus, dest):
     return id_to_word, word_to_id
 
 
-def load_or_create(glove_root_dir, processed_dir, embed_size):
-    glove_final_path = pjoin(processed_dir, "glove.6B.{}d.npy".format(embed_size))
+def load_or_create(glove_root_dir, processed_dir, embed_size, id_to_word):
+    """
+    Loads from memory a set of GloVe vectors.
+    """
+    glove_final_path = pjoin(processed_dir, "glove.squad.{}d.npy".format(embed_size))
     if gfile.Exists(glove_final_path):
         logging.info("Loading pre-built GloVe npy from {}".format(glove_final_path))
         return np.load(glove_final_path)
@@ -85,19 +88,35 @@ def load_or_create(glove_root_dir, processed_dir, embed_size):
         assert_exists(vec_path, "Please run ./split_vec.sh from the root of the project.")
         glove_mat = np.loadtxt(vec_path)
 
+        # Word order
+        glove_order = {}
+        tokens_path = pjoin(glove_root_dir, "token.{}d.txt".format(embed_size))
+        assert_exists(tokens_path, "Please run ./split_vec.sh from root of the project.")
+        # Re-arrange based on our vocabulary
+        with gfile.GFile(tokens_path) as glove_tokens:
+            for i, token in enumerate(glove_tokens):
+                glove_order[token] = i
+
+        # We want to create an embedding matrix that is the same size as the vocabulary
+        trimmed_glove = np.zeros((len(id_to_word), embed_size))
+
+        for i, vocab_word in enumerate(id_to_word):
+            if vocab_word in glove_order:
+                trimmed_glove[i, :] = glove_mat[glove_order[vocab_word]]
+
         logging.info("Saving GloVe vectors to compact file {}".format(glove_final_path))
-        np.save(glove_final_path, glove_mat)
-        return glove_mat
+        np.save(glove_final_path, trimmed_glove)
+        return trimmed_glove
 
 
-def build_glove():
+def build_glove(id_to_word):
     glove_root_dir = tf.flags.FLAGS.glove_dir
     processed_dir = tf.flags.FLAGS.squad_dir
     embed_size = tf.flags.FLAGS.embed_size
-    return load_or_create(glove_root_dir, processed_dir, embed_size)
+    return load_or_create(glove_root_dir, processed_dir, embed_size, id_to_word)
 
 
-def tokens_to_glove(source_file, glove_mat, word_to_id, max_len=None, useindexes=None):
+def tokens_to_ids(source_file, word_to_id, max_len=None, useindexes=None):
     """Reads the given source file that is assumed to be sequence-per-line,
     where the sequences are raw English tokens.
 
@@ -116,8 +135,8 @@ def tokens_to_glove(source_file, glove_mat, word_to_id, max_len=None, useindexes
             tokens = basic_tokenizer(line)
 
             for token in tokens:
-                vec = glove_mat[word_to_id[token]] if token in word_to_id else glove_mat[UNK_ID]
-                seq.append(vec)
+                token_id = word_to_id[token] if token in word_to_id else UNK_ID
+                seq.append(token_id)
 
             if max_len is not None and len(seq) > max_len:
                 continue
@@ -132,14 +151,14 @@ def tokens_to_glove(source_file, glove_mat, word_to_id, max_len=None, useindexes
     # into one large matrix, and for each we want to keep track of the original sequence length
     num_examples = len(sequences)
 
-    processed = np.zeros((num_examples, longest, glove_mat.shape[1]))
+    processed = np.zeros((num_examples, longest))
 
     logging.info("Building the unrolled np array...")
     for i, sequence in enumerate(tqdm(sequences)):
-        for t, vec in enumerate(sequence):
-            processed[i, 0:lengths[i], :] = vec
+        for t, token_id in enumerate(sequence):
+            processed[i, 0:lengths[i]] = token_id
 
-    return processed, indexes
+    return processed, indexes, lengths
 
 
 def build_dataset(prefix, id_to_word, word_to_id, glove_vectors, squad_root):
@@ -148,11 +167,9 @@ def build_dataset(prefix, id_to_word, word_to_id, glove_vectors, squad_root):
     span_path = pjoin(squad_root, prefix + ".span")
 
     context_max_len = tf.flags.FLAGS.max_len
-    context, ind = tokens_to_glove(context_path, glove_vectors, word_to_id, context_max_len)
-    question, _ = tokens_to_glove(question_path, glove_vectors, word_to_id, useindexes=ind)
-    # constructor answers based on the spans
+    context, ind, context_lens = tokens_to_ids(context_path, word_to_id, max_len=context_max_len)
+    question, _, question_lens = tokens_to_ids(question_path, word_to_id, useindexes=ind)
     answer = np.zeros(context.shape[:2], dtype='int32')
-    # import pdb; pdb.set_trace()
     with gfile.GFile(span_path, "r") as span_file:
         for i, line in enumerate(span_file):
             if i in ind:
@@ -165,7 +182,9 @@ def build_dataset(prefix, id_to_word, word_to_id, glove_vectors, squad_root):
     # Write out the correct thing
     output_path = pjoin(squad_root, prefix + ".npz")
     logging.info("Saving all processed {} data to {}".format(prefix, output_path))
-    np.savez(output_path, context=context, question=question, answer=answer)
+    np.savez(output_path,
+             context=context, question=question, answer=answer,
+             context_lens=context_lens, question_lens=question_lens)
 
 
 def main(_):
@@ -181,7 +200,7 @@ def main(_):
     # Build the vocabulary
     vocab_file = pjoin(tf.flags.FLAGS.squad_dir, "vocab.dat")
     id_to_word, word_to_id = build_vocabulary([train_question, train_context, val_question, val_context], vocab_file)
-    glove_vectors = build_glove()
+    glove_vectors = build_glove(id_to_word)
 
     # Using the vocabulary and the GloVe vectors, we create a serialized version of the training
     # and validation set.

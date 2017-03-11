@@ -43,9 +43,14 @@ def train_model(model):
     question = train_data["question"]
     context = train_data["context"]
     answer = train_data["answer"]
+    question_lens = train_data["question_lens"]
+    context_lens = train_data["context_lens"]
     num_training_examples = context.shape[0]
     batch_size = tf.flags.FLAGS.batch_size
     num_batches = math.ceil(num_training_examples / batch_size)
+
+    # Load full GloVe matrix
+    glove_mat = np.load(tf.flags.FLAGS.embed_path)
 
     # Create save_dir for checkpointing if it does not already exist
     if not gfile.Exists(tf.flags.FLAGS.save_dir):
@@ -72,10 +77,15 @@ def train_model(model):
                 question_batch = question[batch_idxs]
                 context_batch = context[batch_idxs]
                 answer_batch = answer[batch_idxs]
+                c_lens = context_lens[batch_idxs]
+                q_lens = question_lens[batch_idxs]
 
                 loss = model.train_batch(question_batch,
                                          context_batch,
-                                         answer_batch)
+                                         answer_batch,
+                                         q_lens,
+                                         c_lens,
+                                         glove_mat)
                 losses.append(loss)
                 fmt_loss = "{:.6f}".format(loss)
                 avg_loss = np.sum(losses) / len(losses)
@@ -122,6 +132,9 @@ def main(_):
         logging.fatal("Error! Given model {} is not an instance of core.SquadModel.".format(tf.flags.FLAGS.model))
         sys.exit(-1)
 
+    # Load GloVe vectors
+    glove_mat = np.load(tf.flags.FLAGS.embed_path)
+
     # Configure the model and build the graph
     config = Config(dict(
         max_length=tf.flags.FLAGS.max_length,
@@ -132,7 +145,7 @@ def main(_):
         cell_type=tf.flags.FLAGS.cell_type,
         save_dir=tf.flags.FLAGS.save_dir
     ))
-    model = model_class()
+    model = model_class(glove_mat)
     model.initialize_graph(config)
 
     mode = tf.flags.FLAGS.mode
@@ -161,7 +174,7 @@ if __name__ == '__main__':
 
     tf.flags.DEFINE_string("data_path", "data/squad/train.npz", "Path to .npz file holding the eval/training matrices")
     tf.flags.DEFINE_string("save_dir", "save", "path to save training results and model checkpoints")
-    tf.flags.DEFINE_string("embed_path", "data/squad/glove.trimmed.100.npz", "path to npz file holding word embeddings")
+    tf.flags.DEFINE_string("embed_path", "data/squad/glove.squad.100d.npy", "path to npy file holding trimmed embeddings")
 
     # Execute main() above, see tf.app documentation for details.
     tf.app.run()

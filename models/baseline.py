@@ -1,9 +1,12 @@
 import logging
 from os.path import join as pjoin
 
+import numpy as np
 import tensorflow as tf
 from tensorflow import nn
 from tensorflow.contrib import rnn
+
+from tensorflow.contrib.layers.python.layers import xavier_initializer
 
 from core import SquadModel
 
@@ -15,53 +18,55 @@ class BaselineModel(SquadModel):
     BiLSTM SQuAD model, simple baseline.
     """
 
-    def __init__(self):
+    def __init__(self, embeddings, train_embeddings=True):
         super(BaselineModel, self).__init__()
         self._question_placeholder = None
         self._passage_placeholder = None
         self._answer_placeholder = None
+        self._mask_placeholder = None
         self._cell = None
         self._loss = None
         self._train_step = None
         self._model_output = None
         self._preds = None
+        self._pretrained_embeddings = tf.Variable(embeddings, trainable=train_embeddings, name="embeddings")
+        self._context_len_placeholder = None
+
+    def _embedding(self, ids, embed_size):
+        embed = tf.nn.embedding_lookup(self._pretrained_embeddings, ids)
+        return tf.reshape(embed, [tf.shape(ids)[0], tf.shape(ids)[1], embed_size])
 
     def initialize_graph(self, config):
-        self._question_placeholder = tf.placeholder(tf.float32, [None, None, config.embed_size], "question_embedded")
-        self._passage_placeholder = tf.placeholder(tf.float32, [None, None, config.embed_size], "passage_embedded")
+        self._question_placeholder = tf.placeholder(tf.int32, [None, None], "question_ids")
+        self._passage_placeholder = tf.placeholder(tf.int32, [None, None], "passage_ids")
         self._answer_placeholder = tf.placeholder(tf.int32, [None, None], "answer_batch")
-
+        self._mask_placeholder = tf.placeholder(tf.bool, [None, None], "mask_batch")
+        self._context_len_placeholder = tf.placeholder(tf.int32, shape=[None], name="context_length")
         self._model_output = config.save_dir
 
+        question_batch = self._embedding(self._question_placeholder, config.embed_size)
+        passage_batch = self._embedding(self._passage_placeholder, config.embed_size)
+
         if config.cell_type == "lstm":
-            cell = rnn.MultiRNNCell([rnn.LSTMCell(config.hidden_size)] * 2)
+            cell = rnn.LSTMCell(config.hidden_size)
         elif config.cell_type == "gru":
-            cell = rnn.MultiRNNCell([rnn.GRUCell(config.hidden_size)] * 2)
+            cell = rnn.GRUCell(config.hidden_size)
         else:
             raise ValueError("Invalid cell_type {}".format(config.cell_type))
 
-        """
-        Run the question through an RNN, using the final output as the "summary" of the question.
+        print(question_batch.get_shape())
+        print(passage_batch.get_shape())
 
-        We then feed this summary h_q as the first hidden state to an encoder of the passage, which yields outputs
-        h_p. We then perform a final LSTM step where we encode the states h_p through a third RNN that outputs
-        a probability distribution per-token of the passage.
-        """
-        with tf.variable_scope("question_rnn"):
-            _, h_q = nn.dynamic_rnn(cell, self._question_placeholder, dtype=tf.float32)
-        with tf.variable_scope("passage_rnn"):
-            h_p, _ = nn.dynamic_rnn(cell, self._passage_placeholder, initial_state=h_q)
+        # Okay fuck this shit so much
+        # Use a stupid linear approximation
+        with tf.variable_scope(self.__class__.__name__):
+            W = tf.get_variable("W", [config.max_length, 2], tf.float32, xavier_initializer())
+            b = tf.get_variable("b", [2], tf.float32, tf.constant_initializer(0.0))
+            self._preds = tf.matmul(passage_batch, W) + b   # Should broadcast?
+            self._loss = tf.constant(0.0)
 
-        with tf.variable_scope("seq_classifier"):
-            classifier_cell = rnn.LSTMCell(2)
-            self._preds, _ = nn.dynamic_rnn(classifier_cell, h_p, dtype=tf.float32)
 
-        # Perform a classification for each token individually
-        losses = nn.sparse_softmax_cross_entropy_with_logits(labels=self._answer_placeholder, logits=self._preds)
-        self._loss = tf.reduce_mean(losses)
-        self._train_step = tf.train.AdamOptimizer(learning_rate=0.01).minimize(self._loss)
-
-    def train_batch(self, question_batch, passage_batch, answer_batch, sess=None):
+    def train_batch(self, question_batch, passage_batch, answer_batch, question_lens, context_lens, glove_mat, sess=None):
         """
         TODO: replace feed_dict with whatever is supposed to be more efficient
         Link: https://www.tensorflow.org/programmers_guide/reading_data
@@ -70,10 +75,17 @@ class BaselineModel(SquadModel):
         if sess is None:
             sess = tf.get_default_session()
 
+        # Create masking tensor
+        mask = np.zeros_like(answer_batch, dtype='bool')
+        for i, length in enumerate(context_lens):
+            mask[i, 0:length] = True
+
         feeds = {
             self._question_placeholder: question_batch,
             self._passage_placeholder: passage_batch,
             self._answer_placeholder: answer_batch,
+            self._mask_placeholder: mask,
+            self._context_len_placeholder: context_lens,
         }
 
         _, loss = sess.run([self._train_step, self._loss], feed_dict=feeds)
