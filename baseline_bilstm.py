@@ -4,12 +4,13 @@ from __future__ import absolute_import
 
 from functools import wraps, lru_cache
 import math
+import os
 import time
 from pprint import pprint
 
 import numpy as np
 import tensorflow as tf
-from tensorflow.contrib.rnn import LSTMCell, GRUCell
+from tensorflow.contrib.rnn import LSTMCell, GRUCell, MultiRNNCell
 
 from tqdm import tqdm
 
@@ -49,6 +50,7 @@ CONFIGURABLE_PARAMS = [
     ('embed_path', 'data/squad/glove.squad.100d.npy', "Path to a .npy file holding the GloVe vectors"),
     ('train_path', 'data/squad/train.npz', "Path to training data as an .npz file"),
     ('val_path', 'data/squad/val.npz', "Path to validation data as an .npz file"),
+    ('save_dir', 'save', 'directory to save model checkpoints after each epoch')
 ]
 
 # Default configuration object
@@ -76,7 +78,7 @@ def setup_args():
 
 def compute_once(expensive):
     """
-    Once-evaluated function. Python 3.x only (use of 'nonlocal' keyword)
+    Decorator for once-evaluated function. Python 3.x only (use of 'nonlocal' keyword)
     """
     computed = False
     value = None
@@ -135,7 +137,7 @@ class BiLSTMModel(object):
 
         # Get a representation of the questions
         with tf.variable_scope("encode_question"):
-            encode_cell = cell(self._config.hidden_size)
+            encode_cell = MultiRNNCell([cell(self._config.hidden_size)] * 2)
             outputs, states = tf.nn.bidirectional_dynamic_rnn(encode_cell, encode_cell,
                                                               questions, sequence_length=self._qlens,
                                                               dtype=tf.float32)
@@ -147,7 +149,7 @@ class BiLSTMModel(object):
         # Print out debugging information
 
         with tf.variable_scope("encode_passage"):
-            encode_cell = cell(self._config.hidden_size)
+            encode_cell = MultiRNNCell([cell(self._config.hidden_size)] * 2)
             outputs, _ = tf.nn.bidirectional_dynamic_rnn(encode_cell, encode_cell,
                                                          contexts, sequence_length=self._clens,
                                                          initial_state_fw=state_fw,
@@ -157,15 +159,16 @@ class BiLSTMModel(object):
 
         # Run the final set of outputs through an LSTM rnn that outputs one of 2 classes
         with tf.variable_scope("decode_answer"):
-            decode_cell = LSTMCell(2)
+            decode_cell = MultiRNNCell([LSTMCell(2)] * 2)
             outputs, _ = tf.nn.dynamic_rnn(decode_cell, outputs, dtype=tf.float32, sequence_length=self._clens)
 
-        loss = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=self._answer, logits=outputs)
+        # loss = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=self._answer, logits=outputs)
         # Transform this hidden state into a vector of the desired size
         # self._loss = tf.Print(tf.reduce_mean(loss), [tf.shape(outputs)])
-        total = tf.reduce_sum(self._answer)
-        matching = tf.reduce_sum(tf.cast(self._answer, tf.float32) * tf.nn.softmax(outputs)[:, :, 1])
-        self._loss = tf.Print(tf.reduce_mean(loss), [total, matching])
+        # total = tf.reduce_sum(self._answer)
+        real = tf.nn.softmax(outputs)[:, :, 1]
+        diff = tf.cast(self._answer, tf.float32) - real
+        self._loss = tf.reduce_mean(tf.square(diff))#tf.Print(tf.reduce_mean(loss), [tf.reduce_sum(tf.square(diff))], summarize=1000)#[total, matching, matching / tf.cast(total, tf.float32)])
         self._train_op = tf.train.AdamOptimizer(learning_rate=self._config.lr).minimize(self._loss)
 
         return self # Return self to allow for chaining
@@ -182,6 +185,13 @@ class BiLSTMModel(object):
             sess = tf.get_default_session()
         feeds = self._build_feeds(questions, contexts, answers, qlens, clens)
         _, loss = sess.run([self._train_op, self._loss], feed_dict=feeds)
+        return loss
+
+    def evaluate(self, questions, contexts, answers, qlens, clens, sess=None):
+        if sess is None:
+            sess = tf.get_default_session()
+        feeds = self._build_feeds(questions, contexts, answers, qlens, clens)
+        loss = sess.run([self._loss], feed_dict=feeds)
         return loss
 
     def _build_embedded(self, ids, dtype=tf.float32):
@@ -235,8 +245,17 @@ def main(_):
 
         num_examples = questions.shape[0]
 
+        # Setup saving
+        saver = tf.train.Saver()
+        save_path = os.path.join(config.save_dir, "model")
+        if not tf.gfile.Exists(config.save_dir):
+            tf.gfile.MakeDirs(config.save_dir)
+
         # Perform training pass
         for epoch in range(config.epochs):
+            # Try to overfit on purpose
+            # TODO: REMOVE num_examples overwrite
+            num_examples = 500
             batch_idxs = minibatch_indexes(num_examples, config.batch_size)
             num_batches = math.ceil(num_examples / config.batch_size)
             print("Epoch: {} / {}".format(epoch + 1, config.epochs))
@@ -248,12 +267,19 @@ def main(_):
                 ans = answers[idxs]
                 q_ls = q_lens[idxs]
                 c_ls = c_lens[idxs]
+
+                # Perform train step
+                tic = time.time()
                 loss = model.train(qs, cs, ans, q_ls, c_ls)
+                toc = time.time()
                 losses.append(loss)
-                time.sleep(0.5)
-                print("\rBatch {} of {} === Loss: {:.7f}               ".format(batch+1, num_batches, loss), end="")
+                # time.sleep(0.5)
+                print("\rBatch {} of {} === Loss: {:.7f}     Time: {:.4f}s          ".format(batch+1, num_batches, loss, toc - tic), end="")
             avg_loss = np.average(losses)
-            print("\nEpoch {} Average Loss: {:.7f}".format(epoch + 1, avg_loss))
+            print("\n---> Epoch {} Average Train Loss: {:.7f}".format(epoch + 1, avg_loss))
+            # Run validation, get validation loss
+            # Save the model
+            saver.save(sess, save_path, global_step=epoch)
 
 if __name__ == '__main__':
     setup_args()
