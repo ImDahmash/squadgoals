@@ -52,14 +52,6 @@ CONFIGURABLE_PARAMS = [
     , ('save_dir', 'save', 'directory to save model checkpoints after each epoch')
 ]
 
-# Default configuration object
-DEFAULT_CONFIG = {
-    name: default for name, default, _ in CONFIGURABLE_PARAMS
-}
-
-print("DEFAULT_CONFIG")
-pprint(DEFAULT_CONFIG)
-
 def setup_args():
     # setup arguments
     for name, default, doc in CONFIGURABLE_PARAMS:
@@ -230,9 +222,9 @@ class BiLSTMModel(object):
 def main(_):
     with tf.Session().as_default() as sess:
         # Train the model
-        config = tf.flags.FLAGS.__dict__
-        config.update(DEFAULT_CONFIG)
-        config = Config(config)
+        config = tf.flags.FLAGS
+        print("Configuration:")
+        pprint(tf.flags.FLAGS.__dict__['__flags'], indent=4)
         model = BiLSTMModel(config).build_graph()
 
         sess.run(tf.global_variables_initializer())
@@ -242,7 +234,9 @@ def main(_):
         # Load validation set data to find test loss after each epoch
         val_qs, val_cs, val_as, val_q_lens, val_c_lens = load_data(config.val_path)
 
-        num_examples = questions.shape[0] if config.subset <= 0 else config.subset
+        num_examples = config.subset if config.subset > 0 else questions.shape[0]
+        print("training on {}".format(config.subset))
+
 
         # Setup saving
         saver = tf.train.Saver()
