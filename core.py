@@ -1,12 +1,3 @@
-class Config(object):
-    """
-    Simple way to wrap a dict to allow accessing using attribute notation.
-    """
-    def __init__(self, d):
-        self.d = d
-
-    def __getattr__(self, name):
-        return self.d[name]
 
 class SquadModel(object):
     """

@@ -2,7 +2,7 @@ from __future__ import print_function
 from __future__ import division
 from __future__ import absolute_import
 
-from functools import wraps, lru_cache
+from functools import lru_cache
 import math
 import os
 import time
@@ -12,9 +12,8 @@ import numpy as np
 import tensorflow as tf
 from tensorflow.contrib.rnn import LSTMCell, GRUCell, MultiRNNCell
 
-from tqdm import tqdm
+from utils import minibatch_index_iterator
 
-from core import Config
 
 ###############################################################
 #       Code to setup the environment, configuration, etc.
@@ -32,57 +31,27 @@ VAL_PATH = "data/squad/val.npz"
 """
 Configuration options:
 """
+tf.flags.DEFINE_integer('hidden_size', 200, "Size of hidden states for encoder")
+tf.flags.DEFINE_integer('batch_size', 32, 'size of mini-batches')
+tf.flags.DEFINE_integer('embed_dim', 100, 'embedding dimension')
+tf.flags.DEFINE_integer('epochs', 10, 'number of epochs for training')
+tf.flags.DEFINE_integer('layers', 2, 'number of hidden layers')
 
-# Default values for configuration parameters
-CONFIGURABLE_PARAMS = [
-      ('hidden_size', 200, "Size of hidden states for encoder")
-    , ('batch_size', 32, 'size of mini-batches')
-    , ('embed_dim', 100, 'embedding dimension')
-    , ('epochs', 10, 'number of epochs for training')
+tf.flags.DEFINE_string('cell_type', 'lstm', "Cell type for RNN")
+tf.flags.DEFINE_float('lr', 0.01, 'learning rate')
 
-    , ('cell_type', 'lstm', "Cell type for RNN")
-    , ('lr', 0.01, 'learning rate')
-    , ('optim', 'adam', 'Optimizer, one of "adam", "adadelta", "sgd"')
+tf.flags.DEFINE_string('optim', 'adam', 'Optimizer, one of "adam", "adadelta", "sgd"')
 
-    , ('subset', 0, 'If > 0, only trains on a subset of the train data of given size')
+tf.flags.DEFINE_integer('subset', 0, 'If > 0, only trains on a subset of the train data of given size')
 
-    , ('embed_path', 'data/squad/glove.squad.100d.npy', "Path to a .npy file holding the GloVe vectors")
-    , ('train_path', 'data/squad/train.npz', "Path to training data as an .npz file")
-    , ('val_path', 'data/squad/val.npz', "Path to validation data as an .npz file")
-    , ('save_dir', 'save', 'directory to save model checkpoints after each epoch')
-]
+tf.flags.DEFINE_string('embed_path', 'data/squad/glove.squad.100d.npy', "Path to a .npy file holding the GloVe vectors")
+tf.flags.DEFINE_string('train_path', 'data/squad/train.npz', "Path to training data as an .npz file")
+tf.flags.DEFINE_string('val_path', 'data/squad/val.npz', "Path to validation data as an .npz file")
+tf.flags.DEFINE_string('save_dir', 'save', 'directory to save model checkpoints after each epoch')
 
-def setup_args():
-    # setup arguments
-    for name, default, doc in CONFIGURABLE_PARAMS:
-        if isinstance(default, int):
-            func = tf.flags.DEFINE_integer
-        elif isinstance(default, str):
-            func = tf.flags.DEFINE_string
-        elif isinstance(default, float):
-            func = tf.flags.DEFINE_float
-        elif isinstance(default, bool):
-            func = tf.flags.DEFINE_boolean
-
-        func(name, default, doc)
-
-
-def compute_once(expensive):
-    """
-    Decorator for once-evaluated function. Python 3.x only (use of 'nonlocal' keyword)
-    """
-    computed = False
-    value = None
-    @wraps(expensive)
-    def inner(*args, **kwargs):
-        nonlocal computed
-        nonlocal value
-        if not computed:
-            value = expensive(*args, **kwargs)
-            computed = True
-        return value
-    return inner
-
+"""
+Utilities
+"""
 
 
 def load_data(path):
@@ -151,7 +120,7 @@ class BiLSTMModel(object):
 
         # Get a representation of the questions
         with tf.variable_scope("encode_question"):
-            encode_cell = MultiRNNCell([cell(self._config.hidden_size)] * 2)
+            encode_cell = MultiRNNCell([cell(self._config.hidden_size)] * self._concat.layers)
             outputs, states = tf.nn.bidirectional_dynamic_rnn(encode_cell, encode_cell,
                                                               questions, sequence_length=self._qlens,
                                                               dtype=tf.float32)
@@ -163,7 +132,7 @@ class BiLSTMModel(object):
         # Print out debugging information
 
         with tf.variable_scope("encode_passage"):
-            encode_cell = MultiRNNCell([cell(self._config.hidden_size)] * 2)
+            encode_cell = MultiRNNCell([cell(self._config.hidden_size)] * self._config.layers)
             outputs, _ = tf.nn.bidirectional_dynamic_rnn(encode_cell, encode_cell,
                                                          contexts, sequence_length=self._clens,
                                                          initial_state_fw=state_fw,
@@ -176,13 +145,14 @@ class BiLSTMModel(object):
             decode_cell = MultiRNNCell([LSTMCell(2)] * 2)
             outputs, _ = tf.nn.dynamic_rnn(decode_cell, outputs, dtype=tf.float32, sequence_length=self._clens)
 
-        # loss = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=self._answer, logits=outputs)
+        self._loss = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=self._answer, logits=outputs)
+        self._loss = tf.reduce_mean(self._loss)
         # Transform this hidden state into a vector of the desired size
         # self._loss = tf.Print(tf.reduce_mean(loss), [tf.shape(outputs)])
         # total = tf.reduce_sum(self._answer)
-        real = tf.nn.softmax(outputs)[:, :, 1]
-        diff = tf.cast(self._answer, tf.float32) - real
-        self._loss = tf.reduce_mean(tf.square(diff))#tf.Print(tf.reduce_mean(loss), [tf.reduce_sum(tf.square(diff))], summarize=1000)#[total, matching, matching / tf.cast(total, tf.float32)])
+        # real = tf.nn.softmax(outputs)[:, :, 1]
+        # diff = tf.cast(self._answer, tf.float32) - real
+        # self._loss = tf.reduce_mean(tf.square(diff))#tf.Print(tf.reduce_mean(loss), [tf.reduce_sum(tf.square(diff))], summarize=1000)#[total, matching, matching / tf.cast(total, tf.float32)])
         self._train_op = tf.train.AdamOptimizer(learning_rate=self._config.lr).minimize(self._loss)
 
         return self # Return self to allow for chaining
@@ -229,13 +199,16 @@ def main(_):
 
         sess.run(tf.global_variables_initializer())
 
+        print("Number of parameters in the model: {}".format(len(tf.trainable_variables())))
+
         questions, contexts, answers, q_lens, c_lens = load_data(config.train_path)
 
         # Load validation set data to find test loss after each epoch
         val_qs, val_cs, val_as, val_q_lens, val_c_lens = load_data(config.val_path)
 
         num_examples = config.subset if config.subset > 0 else questions.shape[0]
-        print("training on {}".format(config.subset))
+        total_params = sum(v.get_shape().num_elements() for v in tf.trainable_variables())
+        print("Total params: {}".format(total_params))
 
 
         # Setup saving
@@ -247,14 +220,12 @@ def main(_):
         # Perform training pass
         epoch_losses = []
         for epoch in range(config.epochs):
-            batch_idxs = minibatch_indexes(num_examples, config.batch_size)
             num_batches = math.ceil(num_examples / config.batch_size)
             losses = []
 
             print("Epoch: {} / {}".format(epoch + 1, config.epochs))
-            for batch in range(num_batches):
+            for batch, idxs in enumerate(minibatch_index_iterator(num_examples, config.batch_size)):
                 # Read batch_size indexes for constructing training batch
-                idxs = batch_idxs[batch]
                 qs = questions[idxs]
                 cs = contexts[idxs]
                 ans = answers[idxs]
@@ -266,7 +237,11 @@ def main(_):
                 loss = model.train(qs, cs, ans, q_ls, c_ls)
                 toc = time.time()
                 losses.append(loss)
-                print("\rBatch {} of {} === Loss: {:.7f}     Time: {:.4f}s          ".format(batch+1, num_batches, loss, toc - tic), end="")
+                # Estimate time remaining
+                delta = toc - tic
+                remaining = (num_batches - batch) / delta
+                remaining = "{:02d}:{:02d}".format(math.floor(remaining / 60), int(remaining % 60))
+                print("\rBatch {} of {} === Loss: {:.7f}     Time: {:.2f}s  ETA: {}        ".format(batch+1, num_batches, loss, delta, remaining), end="")
             avg_loss = np.average(losses)
             epoch_losses.append(avg_loss)
             print("\n--- Epoch {} Average Train Loss: {:.7f}".format(epoch + 1, avg_loss))
@@ -282,5 +257,4 @@ def main(_):
 
 
 if __name__ == '__main__':
-    setup_args()
     tf.app.run(main=main)
