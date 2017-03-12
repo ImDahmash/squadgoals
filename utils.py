@@ -2,25 +2,12 @@
 Simple utility functions that don't necessarily fit elsewhere.
 """
 
-import os
+import time
+import math
 from functools import wraps
 
 import numpy as np
-import tensorflow as tf
-
-
-def try_jitted_session(**kwargs):
-    """
-    Creates a session that uses the XLA JIT compiler for NVIDIA platforms (i.e. the Azure machines).
-    :return: A tf.Session that has JIT compilation of XLA enabled if available, otherwise a vanilla session.
-    """
-    if os.uname().sysname == "Linux":
-        # Config to turn on JIT compilation
-        config = tf.ConfigProto()
-        config.graph_options.optimizer_options.global_jit_level = tf.OptimizerOptions.ON_1
-        return tf.Session(config=config)
-    else:
-        return tf.Session( ** kwargs)
+# import tensorflow as tf
 
 
 def load_glove():
@@ -55,23 +42,48 @@ def compute_once(expensive):
     return inner
 
 class Progress(object):
-    def __init__(self, width=30):
+    def __init__(self, title="", width=30, steps='unknown'):
+        self._title = title
         self._width = width
-        self._dir = 1
-        self._pos = 0
-        self._displays = {} # List of things to display
+        self._steps = steps
+        self._pos = -1
+        self._last_tick = None
 
     def tick(self, **kwargs):
-        # Display new thing
-        print("\r", end="")
-        # New token position
-        self._pos += self._dir
-        if self._pos == self._width or self._pos == 0:
-            self._dir *= -1
-        if self._dir == 1:
-            bar = "=" * self._pos + ">" + "." * (self._width - self._pos)
-        else:
-            bar = "=" * self._pos + "<" + "." * (self._width - self._pos)
+        self._pos += 1
+        title = "{} ({} of {}):  ".format(self._title, self._pos, self._steps)
 
-        print(bar, end="")
+        # Provide estimate of time between ticks
+        now = time.time()
+        if self._last_tick is not None:
+            delta = now - self._last_tick
+            eta = (self._steps - self._pos) * delta
+            kwargs['time'] = "{:.2f}s".format(delta)
+            kwargs['hz'] = "{:.2f}it/s".format(1.0 / delta)
+            kwargs['eta'] = "{:02d}:{:02d}".format(math.floor(eta / 60), int(eta % 60))
+        self._last_tick = now
 
+        pairs = []
+        for k, v in kwargs.items():
+            # Truncate floats
+            if isinstance(v, float) or isinstance(v, np.float) or isinstance(v, np.float32) or isinstance(v, np.float64):
+                v = "{:.4f}".format(v)
+            pairs.append("{}={}".format(k, v))
+        extra_info = '   '.join(pairs)
+
+        print("\r" +  " " * 200, end="\r")
+        text = title + "\t" + extra_info
+        print(text, end="\r")
+
+        if self._pos == self._steps:
+            print()
+
+
+if __name__ == '__main__':
+    # Test progress
+    x = Progress('Training', width=10, steps=100)
+    import random
+    for i in range(100):
+        num = random.random()
+        x.tick(Loss="{:.7f}".format(num))
+        time.sleep(0.2)

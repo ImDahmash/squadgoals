@@ -10,9 +10,9 @@ from pprint import pprint
 
 import numpy as np
 import tensorflow as tf
-from tensorflow.contrib.rnn import LSTMCell, GRUCell, MultiRNNCell
+from tensorflow.contrib.rnn import DropoutWrapper, LSTMCell, GRUCell, MultiRNNCell
 
-from utils import minibatch_index_iterator
+from utils import minibatch_index_iterator, Progress
 
 
 ###############################################################
@@ -120,7 +120,7 @@ class BiLSTMModel(object):
 
         # Get a representation of the questions
         with tf.variable_scope("encode_question"):
-            encode_cell = MultiRNNCell([cell(self._config.hidden_size)] * self._concat.layers)
+            encode_cell = MultiRNNCell([DropoutWrapper(cell(self._config.hidden_size), input_keep_prob=0.99)] * self._config.layers)
             outputs, states = tf.nn.bidirectional_dynamic_rnn(encode_cell, encode_cell,
                                                               questions, sequence_length=self._qlens,
                                                               dtype=tf.float32)
@@ -147,15 +147,9 @@ class BiLSTMModel(object):
 
         self._loss = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=self._answer, logits=outputs)
         self._loss = tf.reduce_mean(self._loss)
-        # Transform this hidden state into a vector of the desired size
-        # self._loss = tf.Print(tf.reduce_mean(loss), [tf.shape(outputs)])
-        # total = tf.reduce_sum(self._answer)
-        # real = tf.nn.softmax(outputs)[:, :, 1]
-        # diff = tf.cast(self._answer, tf.float32) - real
-        # self._loss = tf.reduce_mean(tf.square(diff))#tf.Print(tf.reduce_mean(loss), [tf.reduce_sum(tf.square(diff))], summarize=1000)#[total, matching, matching / tf.cast(total, tf.float32)])
         self._train_op = tf.train.AdamOptimizer(learning_rate=self._config.lr).minimize(self._loss)
 
-        return self # Return self to allow for chaining
+        return self  # Return self to allow for chaining
 
     def train(self, questions, contexts, answers, qlens, clens, sess=None):
         if sess is None:
@@ -223,7 +217,8 @@ def main(_):
             num_batches = math.ceil(num_examples / config.batch_size)
             losses = []
 
-            print("Epoch: {} / {}".format(epoch + 1, config.epochs))
+            # Create progress bar over this
+            bar = Progress('Epoch {} of {}'.format(epoch + 1, config.epochs), steps=num_batches, width=20)
             for batch, idxs in enumerate(minibatch_index_iterator(num_examples, config.batch_size)):
                 # Read batch_size indexes for constructing training batch
                 qs = questions[idxs]
@@ -233,15 +228,11 @@ def main(_):
                 c_ls = c_lens[idxs]
 
                 # Perform train step
-                tic = time.time()
                 loss = model.train(qs, cs, ans, q_ls, c_ls)
-                toc = time.time()
                 losses.append(loss)
-                # Estimate time remaining
-                delta = toc - tic
-                remaining = (num_batches - batch) / delta
-                remaining = "{:02d}:{:02d}".format(math.floor(remaining / 60), int(remaining % 60))
-                print("\rBatch {} of {} === Loss: {:.7f}     Time: {:.2f}s  ETA: {}        ".format(batch+1, num_batches, loss, delta, remaining), end="")
+
+                # Calculate some stats to print
+                bar.tick(loss=loss, avg=np.average(losses), hi=max(losses), lo=min(losses))
             avg_loss = np.average(losses)
             epoch_losses.append(avg_loss)
             print("\n--- Epoch {} Average Train Loss: {:.7f}".format(epoch + 1, avg_loss))
