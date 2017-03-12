@@ -149,7 +149,10 @@ def tokens_to_ids(source_file, word_to_id, max_len=None, useindexes=None):
     # into one large matrix, and for each we want to keep track of the original sequence length
     num_examples = len(sequences)
 
-    processed = np.zeros((num_examples, longest))
+    if max_len is None:
+        max_len = longest
+
+    processed = np.zeros((num_examples, max_len))
 
     logging.info("Building the unrolled np array...")
     for i, sequence in enumerate(tqdm(sequences)):
@@ -164,6 +167,7 @@ def build_dataset(prefix, id_to_word, word_to_id, glove_vectors, squad_root):
     question_path = pjoin(squad_root, prefix + ".question")
     span_path = pjoin(squad_root, prefix + ".span")
 
+    # Setup a max_len here
     context_max_len = tf.flags.FLAGS.max_len
     context, ind, context_lens = tokens_to_ids(context_path, word_to_id, max_len=context_max_len)
     question, _, question_lens = tokens_to_ids(question_path, word_to_id, useindexes=ind)

@@ -1,4 +1,4 @@
-FROM tensorflow/tensorflow:1.0.0-py3
+FROM tensorflow/tensorflow:1.0.0-gpu-py3
 RUN pip install joblib
 RUN pip install nltk
 RUN pip install tqdm

@@ -26,7 +26,7 @@ class SquadModel(object):
         """
         raise NotImplementedError("Abstract method")
 
-    def train_batch(self, question_batch, passage_batch, answer_batch, question_lens, passage_lens, glove_mat, sess=None):
+    def train_batch(self, question_batch, passage_batch, answer_batch, question_lens, passage_lens, sess=None):
         """
         Train on a set of data of a fixed size. All the parameters have the same first dimension (batch_size),
         passage_ids and answer_batch have same 2nd dimension as well.
@@ -37,7 +37,7 @@ class SquadModel(object):
         """
         raise NotImplementedError("Abstract method")
 
-    def predict(self, question_batch, passage_batch, answer_batch, sess=None):
+    def predict(self, question_batch, passage_batch, answer_batch, question_lens, passage_lens, sess=None):
         """
         Ask the model to perform predictions about the given set of things
         :param question_batch: A list of lists of token IDs representing the question for each batch member

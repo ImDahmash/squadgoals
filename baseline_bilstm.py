@@ -35,22 +35,21 @@ Configuration options:
 
 # Default values for configuration parameters
 CONFIGURABLE_PARAMS = [
-    ('hidden_size', 200, "Size of hidden states for encoder"),
-    ('batch_size', 32, 'size of mini-batches'),
-    ('embed_dim', 100, 'embedding dimension'),
-    ('epochs', 10, 'number of epochs for training'),
+      ('hidden_size', 200, "Size of hidden states for encoder")
+    , ('batch_size', 32, 'size of mini-batches')
+    , ('embed_dim', 100, 'embedding dimension')
+    , ('epochs', 10, 'number of epochs for training')
 
-    ('cell_type', 'lstm', "Cell type for RNN"),
-    ('lr', 0.01, 'learning rate'),
-    ('optim', 'adam', 'Optimizer, one of "adam", "adadelta", "sgd"'),
+    , ('cell_type', 'lstm', "Cell type for RNN")
+    , ('lr', 0.01, 'learning rate')
+    , ('optim', 'adam', 'Optimizer, one of "adam", "adadelta", "sgd"')
 
-    ('max_question', 40, 'maximum length of question (in tokens)'),
-    ('max_context', 100, 'maximum length of passage (in tokens)'),
+    , ('subset', 0, 'If > 0, only trains on a subset of the train data of given size')
 
-    ('embed_path', 'data/squad/glove.squad.100d.npy', "Path to a .npy file holding the GloVe vectors"),
-    ('train_path', 'data/squad/train.npz', "Path to training data as an .npz file"),
-    ('val_path', 'data/squad/val.npz', "Path to validation data as an .npz file"),
-    ('save_dir', 'save', 'directory to save model checkpoints after each epoch')
+    , ('embed_path', 'data/squad/glove.squad.100d.npy', "Path to a .npy file holding the GloVe vectors")
+    , ('train_path', 'data/squad/train.npz', "Path to training data as an .npz file")
+    , ('val_path', 'data/squad/val.npz', "Path to validation data as an .npz file")
+    , ('save_dir', 'save', 'directory to save model checkpoints after each epoch')
 ]
 
 # Default configuration object
@@ -94,6 +93,25 @@ def compute_once(expensive):
 
 
 
+def load_data(path):
+    data = np.load(path)
+
+    questions = data["question"]
+    contexts = data["context"]
+    answers = data["answer"]
+
+    questions_lens = data["question_lens"]
+    contexts_lens = data["context_lens"]
+
+    return questions, contexts, answers, questions_lens, contexts_lens
+
+def minibatch_indexes(maxidx, batch_size):
+    # Perform random batch ordering
+    order = np.random.permutation(maxidx)
+    batch_idxs = []
+    for i in range(0, maxidx, batch_size):
+        batch_idxs.append(order[i:i + batch_size])
+    return batch_idxs
 
 
 
@@ -112,17 +130,21 @@ class BiLSTMModel(object):
         # configure model variables
         # load GloVe embedding
         self._embed = tf.Variable(self._load_embeddings(), name="embeddings")
-        self._question = tf.placeholder(tf.int32, [None, self._config.max_question], "question_batch")
-        self._context = tf.placeholder(tf.int32, [None, self._config.max_context], "context_batch")
-        self._answer = tf.placeholder(tf.int32, [None, self._config.max_context], "labels_batch")
-        self._question_mask = tf.placeholder(tf.bool, [None, self._config.max_question], "question_mask")
-        self._context_mask = tf.placeholder(tf.bool, [None, self._config.max_context], "context_mask")
+        self._question = tf.placeholder(tf.int32, [None, None], "question_batch")
+        self._context = tf.placeholder(tf.int32, [None, None], "context_batch")
+        self._answer = tf.placeholder(tf.int32, [None, None], "labels_batch")
         self._qlens = tf.placeholder(tf.int32, [None], "question_lengths")
         self._clens = tf.placeholder(tf.int32, [None], "context_lengths")
 
         self._predictions = None
         self._loss = None
         self._train_op = None
+
+    @lru_cache()
+    def _load_embeddings(self):
+        # Lazy compute the embedding matrix
+        print("Loading GloVe vectors from {}".format(self._config.embed_path))
+        return np.load(self._config.embed_path)
 
     def build_graph(self):
         # Add an embeddings layer
@@ -173,13 +195,6 @@ class BiLSTMModel(object):
 
         return self # Return self to allow for chaining
 
-
-    @lru_cache()
-    def _load_embeddings(self):
-        # Lazy compute the embedding matrix
-        print("Loading GloVe vectors from {}".format(self._config.embed_path))
-        return np.load(self._config.embed_path)
-
     def train(self, questions, contexts, answers, qlens, clens, sess=None):
         if sess is None:
             sess = tf.get_default_session()
@@ -191,7 +206,7 @@ class BiLSTMModel(object):
         if sess is None:
             sess = tf.get_default_session()
         feeds = self._build_feeds(questions, contexts, answers, qlens, clens)
-        loss = sess.run([self._loss], feed_dict=feeds)
+        loss = sess.run(self._loss, feed_dict=feeds)
         return loss
 
     def _build_embedded(self, ids, dtype=tf.float32):
@@ -211,25 +226,6 @@ class BiLSTMModel(object):
         }
         return feeds
 
-def load_data(path):
-    data = np.load(path)
-
-    questions = data["question"]
-    contexts = data["context"]
-    answers = data["answer"]
-
-    questions_lens = data["question_lens"]
-    contexts_lens = data["context_lens"]
-
-    return questions, contexts, answers, questions_lens, contexts_lens
-
-def minibatch_indexes(maxidx, batch_size):
-    # Perform random batch ordering
-    order = np.random.permutation(maxidx)
-    batch_idxs = []
-    for i in range(0, maxidx, batch_size):
-        batch_idxs.append(order[i:i + batch_size])
-    return batch_idxs
 
 def main(_):
     with tf.Session().as_default() as sess:
@@ -243,7 +239,10 @@ def main(_):
 
         questions, contexts, answers, q_lens, c_lens = load_data(config.train_path)
 
-        num_examples = questions.shape[0]
+        # Load validation set data to find test loss after each epoch
+        val_qs, val_cs, val_as, val_q_lens, val_c_lens = load_data(config.val_path)
+
+        num_examples = questions.shape[0] if config.subset <= 0 else config.subset
 
         # Setup saving
         saver = tf.train.Saver()
@@ -252,15 +251,15 @@ def main(_):
             tf.gfile.MakeDirs(config.save_dir)
 
         # Perform training pass
+        epoch_losses = []
         for epoch in range(config.epochs):
-            # Try to overfit on purpose
-            # TODO: REMOVE num_examples overwrite
-            num_examples = 500
             batch_idxs = minibatch_indexes(num_examples, config.batch_size)
             num_batches = math.ceil(num_examples / config.batch_size)
-            print("Epoch: {} / {}".format(epoch + 1, config.epochs))
             losses = []
+
+            print("Epoch: {} / {}".format(epoch + 1, config.epochs))
             for batch in range(num_batches):
+                # Read batch_size indexes for constructing training batch
                 idxs = batch_idxs[batch]
                 qs = questions[idxs]
                 cs = contexts[idxs]
@@ -273,13 +272,20 @@ def main(_):
                 loss = model.train(qs, cs, ans, q_ls, c_ls)
                 toc = time.time()
                 losses.append(loss)
-                # time.sleep(0.5)
                 print("\rBatch {} of {} === Loss: {:.7f}     Time: {:.4f}s          ".format(batch+1, num_batches, loss, toc - tic), end="")
             avg_loss = np.average(losses)
-            print("\n---> Epoch {} Average Train Loss: {:.7f}".format(epoch + 1, avg_loss))
+            epoch_losses.append(avg_loss)
+            print("\n--- Epoch {} Average Train Loss: {:.7f}".format(epoch + 1, avg_loss))
             # Run validation, get validation loss
+            val_loss = model.evaluate(val_qs, val_cs, val_as, val_q_lens, val_c_lens)
+            print("  \ Validation Loss: {:.7f}".format(val_loss))
             # Save the model
             saver.save(sess, save_path, global_step=epoch)
+
+        # Write the losses out to a file for later
+        print("Saving statistics...")
+        np.save("statistics.npz", epoch_losses=epoch_losses)
+
 
 if __name__ == '__main__':
     setup_args()
