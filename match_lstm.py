@@ -10,7 +10,7 @@ from pprint import pprint
 
 import numpy as np
 import tensorflow as tf
-from tensorflow.contrib.rnn import DropoutWrapper, BasicLSTMCell, GRUCell, MultiRNNCell
+from tensorflow.contrib.rnn import DropoutWrapper, BasicLSTMCell, GRUCell, MultiRNNCell, RNNCell
 
 from utils import minibatch_index_iterator, Progress
 
@@ -27,12 +27,11 @@ TRAIN_PATH = "data/squad/train.npz"
 VAL_PATH = "data/squad/val.npz"
 
 
-
 """
 Configuration options:
 """
 tf.flags.DEFINE_integer('hidden_size', 200, "Size of hidden states for encoder")
-tf.flags.DEFINE_integer('batch_size', 32, 'size of mini-batches')
+tf.flags.DEFINE_integer('batch_size', 30, 'size of mini-batches')
 tf.flags.DEFINE_integer('embed_dim', 100, 'embedding dimension')
 tf.flags.DEFINE_integer('epochs', 10, 'number of epochs for training')
 tf.flags.DEFINE_integer('layers', 2, 'number of hidden layers')
@@ -77,16 +76,18 @@ def minibatch_indexes(maxidx, batch_size):
 
 
 def batch_matmul(xs, W):
-    batch_size, m, n = tf.shape(xs)
-    tf.reshape(xs, [batch_size * m, n])
-    result = tf.matmul(xs, W)
-    return tf.reshape(result, [batch_size, m, n])
+    shape = tf.shape(xs)
+    W_shape = tf.shape(W)
+    batch_size, m, n = shape[0], shape[1], shape[2]
+    xs_shaped = tf.reshape(xs, [batch_size * m, n])
+    result = tf.matmul(xs_shaped, W)
+    return tf.reshape(result, [batch_size, m, W_shape[1]])
 
 ###############################################################
 #           Model Implementation
 ###############################################################
 
-class LSTMCellWithAtt(tf.nn.rnn_cell.RNNCell):
+class LSTMCellWithAtt(RNNCell):
     def __init__(self, hq, hidden_size):
         self.hq = hq
         self.hidden_size = hidden_size
@@ -107,16 +108,45 @@ class LSTMCellWithAtt(tf.nn.rnn_cell.RNNCell):
             W_q = tf.get_variable("W_q", [self.hidden_size, self.hidden_size], tf.float32, initializer = tf.contrib.layers.xavier_initializer())
             W_p = tf.get_variable("W_p", [self.hidden_size, self.hidden_size], tf.float32, initializer = tf.contrib.layers.xavier_initializer())
             W_r = tf.get_variable("W_r", [self.hidden_size, self.hidden_size], tf.float32, initializer = tf.contrib.layers.xavier_initializer())
+            W = tf.get_variable("W", [self.hidden_size, 1], tf.float32, initializer = tf.contrib.layers.xavier_initializer())
             b_p = tf.get_variable("b_p", [self.hidden_size], tf.float32, initializer = tf.constant_initializer(0.0))
             b = tf.get_variable("b", [1], tf.float32, initializer = tf.constant_initializer(0.0))
-            
-            G = tf.nn.tanh(batch_matmul(self.hq, W_q) + tf.matmul(inputs, W_r) + b_p)
-            alpha = tf.nn.softmax(batch_matmul(G, W)+ b)
-            z = tf.matmul(tf.transpose(alpha), self.hq)
-            z = tf.concat([inputs, z], axis=2)
+
+            G = tf.nn.tanh(batch_matmul(self.hq, W_q) + tf.matmul(state, W_p) + tf.matmul(inputs, W_r) + b_p)
+            alpha = tf.nn.softmax(batch_matmul(G, W) + b)
+            # alpha = tf.reshape(alpha, [-1, self.hidden_size])
+            attended = tf.matmul(alpha, self.hq)
+            import pdb; pdb.set_trace()
+            z = tf.concat([tf.expand_dims(inputs, -1), attended], axis=2)
             return self.cell(z, state)
 
+class AnsPtrCell(RNNCell):
+    def __init__(self, Hr, hidden_size):
+        self._Hr = Hr
+        self._hidden_size = hidden_size
+        self._cell = BasicLSTMCell(hidden_size)
 
+    @property
+    def state_size(self):
+        return self._hidden_size
+
+    @property
+    def output_size(self):
+        raise NotImplementedError("fill this in if we need to")
+
+    def __call__(self, inputs, state, scope=None):
+        scope = scope or type(self).__name__
+        with tf.variable_scope(scope):
+            V = tf.get_variable("V", [2*self._hidden_size, self._hidden_size], tf.float32, initializer = tf.contrib.layers.xavier_initializer())
+            W_a = tf.get_variable("W_a", [self._hidden_size, self._hidden_size], tf.float32, initializer = tf.contrib.layers.xavier_initializer())
+            b_a = tf.get_variable("b_a", [self._hidden_size], tf.float32, tf.constant(0.0))
+            v = tf.get_variable("v", [self._hidden_size], tf.float32, tf.constant_initializer(0.0))
+            c = tf.get_variable("c", [1], tf.float32, tf.constant_initializer(0.0))
+
+            F = tf.nn.tanh(batch_matmul(self._Hr, V) + tf.matmul(state, W_a) + b_a)
+            B = tf.nn.softmax(batch_matmul(F, v) + c)
+            new_h, _ = self._cell(tf.matmul(tf.transpose(B), self._Hr), state)
+            return B, new_h
 
 
 class MatchLSTMModel(object):
@@ -160,25 +190,32 @@ class MatchLSTMModel(object):
         # Get a representation of the questions
         with tf.variable_scope("encode_question"):
             encode_cell = cell(self._config.hidden_size)
-            H_q, _ = tf.nn.dynamic_rnn(encode_cell, self._question,
-                                       questions, sequence_length=self._qlens,
-                                       dtype=tf.float32)
+            H_q, _ = tf.nn.dynamic_rnn(encode_cell, questions, self._qlens, dtype=tf.float32)
 
         with tf.variable_scope("encode_passage"):
             encode_cell = cell(self._config.hidden_size)
-            H_p,  = tf.nn.dynamic_rnn(encode_cell, self._context,
-                                      contexts, sequence_length=self._clens
-                                      dtype=tf.float32)
+            H_p, _  = tf.nn.dynamic_rnn(encode_cell, contexts, self._clens, dtype=tf.float32)
 
             attention_cell = LSTMCellWithAtt(H_q, self._config.hidden_size)
-            H_r, _ = tf.nn.bidirectional_rnn(attention_cell, attention_cell,
-                                             H_p, sequence_length=self._clens,
-                                             dtype=tf.float32)
+            H_r, _ = tf.nn.bidirectional_dynamic_rnn(attention_cell, attention_cell,
+                                                     H_p, sequence_length=self._clens,
+                                                     dtype=tf.float32)
             H_r = tf.concat(H_r, axis=2)
 
+        with tf.variable_scope("answer_ptr"):
+            # Perform decoding
+            answer_cell = AnsPtrCell(H_r, self._config.hidden_size)
+            state = tf.zeros(self._config.batch_size, self._config.hidden_size)
+            B1, state = answer_cell(None, state)
+            B2, _ = answer_cell(None, state)
+            # ^ I'm relatively certain this is what we're supposed to be doing, take a look
+            # at Figure 1(b) but this is how I read it.
 
 
-        self._loss = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=self._answer, logits=outputs)
+        # Loss function, equation (12) in the paper.
+        starts = tf.argmax(B1, axis=2)
+        ends = tf.argmax(B2, axis=2)
+        self._loss =  - tf.log(starts) - tf.log(ends) # Loss per thing
         self._loss = tf.reduce_mean(self._loss)
         self._train_op = tf.train.AdamOptimizer(learning_rate=self._config.lr).minimize(self._loss)
 
@@ -222,7 +259,7 @@ def main(_):
         config = tf.flags.FLAGS
         print("Configuration:")
         pprint(tf.flags.FLAGS.__dict__['__flags'], indent=4)
-        model = BiLSTMModel(config).build_graph()
+        model = MatchLSTMModel(config).build_graph()
 
         sess.run(tf.global_variables_initializer())
 
