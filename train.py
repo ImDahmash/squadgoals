@@ -82,7 +82,7 @@ def minibatch_indexes(maxidx, batch_size):
 
 
 ###############################################################
-#           Model Implementation
+#           Training
 ###############################################################
 
 
@@ -106,8 +106,8 @@ def main(_):
 
         sess.run(tf.global_variables_initializer())
 
-        print("Number of parameters in the model: {}".format(len(tf.trainable_variables())))
-
+        print("Parameters:")
+        pprint(list(kv.name for kv in tf.trainable_variables()))
         questions, contexts, answers, q_lens, c_lens = load_data(config.train_path)
 
         # Load validation set data to find test loss after each epoch
@@ -134,9 +134,6 @@ def main(_):
             bar = Progress('Epoch {} of {}'.format(epoch + 1, config.epochs), steps=num_batches, width=20, sameline=False)
             for batch, idxs in enumerate(minibatch_index_iterator(num_examples, config.batch_size)):
                 # Read batch_size indexes for constructing training batch
-                if len(idxs) != config.batch_size:
-                    # Batches are expected to be the same size.
-                    continue
                 qs = questions[idxs]
                 cs = contexts[idxs]
                 ans = answers[idxs]
@@ -145,6 +142,7 @@ def main(_):
 
                 # Perform train step
                 loss = model.train(qs, cs, ans, q_ls, c_ls)
+                print("loss", loss)
                 losses.append(loss)
 
                 # Calculate some stats to print
@@ -158,11 +156,6 @@ def main(_):
             print("  \ Validation Loss: {:.7f}".format(val_loss))
             # Save the model
             saver.save(sess, save_path, global_step=epoch)
-            writer = tf.summary.FileWriter("save", sess.graph, flush_secs=5)
-
-            summ = tf.summary.scalar(1.0)
-            writer.add_summary(summ)
-            writer.flush()
 
         # Write the losses out to a file for later
         print("Saving statistics...")

@@ -60,9 +60,9 @@ def compute_once(expensive):
 def batch_matmul(xs, W):
     shape = tf.shape(xs)
     W_shape = tf.shape(W)
-    xs = tf.reshape(xs, [shape[0] * shape[1], shape[2]])
+    xs = tf.reshape(xs, [-1, shape[2]])
     result = tf.matmul(xs, W)
-    return tf.reshape(result, [shape[0], shape[1], W_shape[1]])
+    return tf.reshape(result, [shape[0], shape[1], W_shape[1]]) # Final dimension should be last dim of W
 
 
 class Progress(object):

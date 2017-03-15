@@ -17,7 +17,7 @@ class MatchLSTMModel(object):
         self._config = config
 
         # configure model variables
-        # load GloVe embedding
+        # load GloVe embedding, don't train embedings
         self._embed = tf.Variable(self._load_embeddings(), name="embeddings", trainable=False)
         self._question = tf.placeholder(tf.int32, [None, None], "question_batch")
         self._context = tf.placeholder(tf.int32, [None, None], "context_batch")
@@ -52,8 +52,6 @@ class MatchLSTMModel(object):
             encode_cell = cell(self._config.hidden_size)
             H_q, _ = tf.nn.dynamic_rnn(encode_cell, questions, self._qlens, dtype=tf.float32)
 
-        print("H_q shape", H_q.get_shape())
-
         with tf.variable_scope("encode_passage"):
             encode_cell = cell(self._config.hidden_size)
             H_p, _  = tf.nn.dynamic_rnn(encode_cell, contexts, self._clens, dtype=tf.float32)
@@ -63,29 +61,27 @@ class MatchLSTMModel(object):
                                                      H_p, sequence_length=self._clens,
                                                      dtype=tf.float32)
             H_r = tf.concat(H_r, axis=2)
-            print("H_r shape: ", H_r.get_shape())
 
         with tf.variable_scope("answer_ptr"):
             # Perform decoding
             answer_cell = AnsPtrCell(H_r, self._config.hidden_size)
-            state = answer_cell.zero_state(self._config.batch_size, dtype=tf.float32)
+            state = answer_cell.zero_state(tf.shape(H_r)[0], dtype=tf.float32)
 
             B_s, state = answer_cell(None, state)
             tf.get_variable_scope().reuse_variables()
             B_e, _ = answer_cell(None, state)
-            # ^ I'm relatively certain this is what we're supposed to be doing, take a look
-            # at Figure 1(b) but this is how I read it.
 
         # Reshape these out
-        B_s = tf.reshape(B_s, [self._config.batch_size, -1])
-        B_e = tf.reshape(B_e, [self._config.batch_size, -1])
+        B_s = tf.reshape(B_s, [tf.shape(questions)[0], -1])
+        B_e = tf.reshape(B_e, [tf.shape(questions)[0], -1])
 
-        loss = 0.0
-        loss += tf.nn.sparse_softmax_cross_entropy_with_logits(labels=self._starts, logits=B_s)
-        loss += tf.nn.sparse_softmax_cross_entropy_with_logits(labels=self._ends, logits=B_e)
-        self._loss = tf.Print(tf.reduce_mean(loss), [B_s, B_e, tf.shape(B_s), tf.shape(B_e)])
+        loss = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=self._starts, logits=B_s) \
+                + tf.nn.sparse_softmax_cross_entropy_with_logits(labels=self._ends, logits=B_e)
 
-        # self._loss = tf.reduce_mean(self._loss)
+        # loss = tf.Print(loss, [B_e], summarize=100)
+        # self._loss = tf.Print(tf.reduce_mean(loss), [B_s, B_e, tf.shape(B_s), tf.shape(B_e)], summarize=100)
+        self._loss = tf.reduce_mean(loss)
+
         self._train_op = tf.train.AdamOptimizer(learning_rate=self._config.lr).minimize(self._loss)
 
         return self  # Return self to allow for chaining
