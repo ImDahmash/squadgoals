@@ -5,6 +5,7 @@ from __future__ import absolute_import
 from functools import lru_cache
 import math
 import os
+import time
 from pprint import pprint
 
 import numpy as np
@@ -13,6 +14,10 @@ import tensorflow as tf
 
 from cells import *
 from utils import minibatch_index_iterator, Progress
+
+
+# tfdbg tensorflow debugger
+from tensorflow.python import debug as tf_debug
 
 
 ###############################################################
@@ -89,10 +94,11 @@ class MatchLSTMModel(object):
 
         # configure model variables
         # load GloVe embedding
-        self._embed = tf.Variable(self._load_embeddings(), name="embeddings")
+        self._embed = tf.Variable(self._load_embeddings(), name="embeddings", trainable=False)
         self._question = tf.placeholder(tf.int32, [None, None], "question_batch")
         self._context = tf.placeholder(tf.int32, [None, None], "context_batch")
-        self._spans = tf.placeholder(tf.int32, [None, 2], "spans_batch")
+        self._starts = tf.placeholder(tf.int32, [None], "spans_batch")
+        self._ends = tf.placeholder(tf.int32, [None], "spans_batch")
         self._qlens = tf.placeholder(tf.int32, [None], "question_lengths")
         self._clens = tf.placeholder(tf.int32, [None], "context_lengths")
 
@@ -133,6 +139,7 @@ class MatchLSTMModel(object):
                                                      H_p, sequence_length=self._clens,
                                                      dtype=tf.float32)
             H_r = tf.concat(H_r, axis=2)
+            print("H_r shape: ", H_r.get_shape())
 
         with tf.variable_scope("answer_ptr"):
             # Perform decoding
@@ -140,8 +147,8 @@ class MatchLSTMModel(object):
             state = answer_cell.zero_state(self._config.batch_size, dtype=tf.float32)
 
             B_s, state = answer_cell(None, state)
-            # Set reuse = True
-            B_e, _ = answer_cell(None, state, reuse=True)
+            tf.get_variable_scope().reuse_variables()
+            B_e, _ = answer_cell(None, state)
             # ^ I'm relatively certain this is what we're supposed to be doing, take a look
             # at Figure 1(b) but this is how I read it.
 
@@ -149,25 +156,10 @@ class MatchLSTMModel(object):
         B_s = tf.reshape(B_s, [self._config.batch_size, -1])
         B_e = tf.reshape(B_e, [self._config.batch_size, -1])
 
-        # Loss
-        # Find the correct answer
-        # Find the first correct answer
-        # We know the start and end for each item in the batch
-        starts = self._spans[:, 0]
-        ends = self._spans[:, 1]
-        # import pdb; pdb.set_trace()
-        # a = B_s[:, starts]
-        # b = B_e[:, ends]
-        # self._loss =  - tf.log(a) - tf.log(b) # Loss per thing
-
-        # Per each batch, predicts the start and end tokens
-        # The issue with this I guess is that FUCK
-        self._loss = 0
-        for i in range(self._config.batch_size):
-            beta = B_s[i]
-            # True answer
-            self._loss -= tf.log(beta[starts[i]])
-            self._loss -= tf.log(beta[ends[i]])
+        loss = 0.0
+        loss += tf.nn.sparse_softmax_cross_entropy_with_logits(labels=self._starts, logits=B_s)
+        loss += tf.nn.sparse_softmax_cross_entropy_with_logits(labels=self._ends, logits=B_e)
+        self._loss = tf.Print(tf.reduce_mean(loss), [B_s, B_e, tf.shape(B_s), tf.shape(B_e)])
 
         # self._loss = tf.reduce_mean(self._loss)
         self._train_op = tf.train.AdamOptimizer(learning_rate=self._config.lr).minimize(self._loss)
@@ -196,12 +188,10 @@ class MatchLSTMModel(object):
 
 
     def _build_feeds(self, questions, contexts, answers, qlens, clens):
-
         # Build spans based on the answers
         batch_size = answers.shape[0]
         spans = np.zeros([batch_size, 2])
         for i in range(batch_size):
-            # extract spans
             line = answers[i]
             places = np.where(line != 0)[0].tolist()
             start, end = places[0], places[-1]
@@ -210,7 +200,8 @@ class MatchLSTMModel(object):
         feeds = {
             self._question: questions,
             self._context: contexts,
-            self._spans: spans,
+            self._starts: spans[:, 0],
+            self._ends: spans[:, 1],
             self._qlens: qlens,
             self._clens: clens,
         }
@@ -219,11 +210,18 @@ class MatchLSTMModel(object):
 
 def main(_):
     with tf.Session().as_default() as sess:
+        # sess = tf_debug.LocalCLIDebugWrapperSession(sess)   # DEbugging
+
         # Train the model
         config = tf.flags.FLAGS
         print("Configuration:")
         pprint(tf.flags.FLAGS.__dict__['__flags'], indent=4)
+
+        # Time building the graph
+        tic = time.time()
         model = MatchLSTMModel(config).build_graph()
+        toc = time.time()
+        print("Took {:.2f}s to build graph.".format(toc - tic))
 
         sess.run(tf.global_variables_initializer())
 
@@ -252,13 +250,12 @@ def main(_):
             losses = []
 
             # Create progress bar over this
-            bar = Progress('Epoch {} of {}'.format(epoch + 1, config.epochs), steps=num_batches, width=20)
+            bar = Progress('Epoch {} of {}'.format(epoch + 1, config.epochs), steps=num_batches, width=20, sameline=False)
             for batch, idxs in enumerate(minibatch_index_iterator(num_examples, config.batch_size)):
                 # Read batch_size indexes for constructing training batch
                 if len(idxs) != config.batch_size:
-                    # Batches must be same size for the math to work out.
+                    # Batches are expected to be the same size.
                     continue
-
                 qs = questions[idxs]
                 cs = contexts[idxs]
                 ans = answers[idxs]
@@ -271,6 +268,7 @@ def main(_):
 
                 # Calculate some stats to print
                 bar.tick(loss=loss, avg=np.average(losses), hi=max(losses), lo=min(losses))
+                saver.save(sess, save_path, global_step=epoch)
             avg_loss = np.average(losses)
             epoch_losses.append(avg_loss)
             print("\n--- Epoch {} Average Train Loss: {:.7f}".format(epoch + 1, avg_loss))
@@ -279,6 +277,8 @@ def main(_):
             print("  \ Validation Loss: {:.7f}".format(val_loss))
             # Save the model
             saver.save(sess, save_path, global_step=epoch)
+            writer = tf.summary.FileWriter("save", sess.graph, flush_secs=5)
+            writer.flush()
 
         # Write the losses out to a file for later
         print("Saving statistics...")

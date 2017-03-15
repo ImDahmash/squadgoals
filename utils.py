@@ -7,7 +7,23 @@ import math
 from functools import wraps
 
 import numpy as np
-# import tensorflow as tf
+import tensorflow as tf
+
+"""
+Assertions
+"""
+def assert_rank(name, tensor, expected_rank):
+    actual_rank = len(tensor.get_shape())
+    assert expected_rank == actual_rank, \
+        "Wrong shape for {}! Expected {}, Actual {}".format(name, expected_rank, actual_rank)
+
+def assert_dim(name, tensor, dim, expected_value):
+    actual_shape = tensor.get_shape()
+    actual_value = actual_shape[dim]
+    assert expected_value == actual_value, \
+        "Wrong shape for {}! Expected shape[{}] == {}, was {}. Total shape: {}".format(
+            name, dim, expected_value, actual_value, actual_shape
+        )
 
 
 def load_glove():
@@ -42,7 +58,6 @@ def compute_once(expensive):
     return inner
 
 def batch_matmul(xs, W):
-    import tensorflow as tf
     shape = tf.shape(xs)
     W_shape = tf.shape(W)
     xs = tf.reshape(xs, [shape[0] * shape[1], shape[2]])
@@ -51,12 +66,13 @@ def batch_matmul(xs, W):
 
 
 class Progress(object):
-    def __init__(self, title="", width=30, steps='unknown'):
+    def __init__(self, title="", width=30, steps='unknown', sameline=True):
         self._title = title
         self._width = width
         self._steps = steps
         self._pos = -1
         self._last_tick = None
+        self._sameline = sameline
 
     def tick(self, **kwargs):
         self._pos += 1
@@ -80,9 +96,11 @@ class Progress(object):
             pairs.append("{}={}".format(k, v))
         extra_info = '   '.join(pairs)
 
-        print("\r" +  " " * 200, end="\r")
+        ending = "\r" if self._sameline else "\n"
+        if ending == "\r":
+            print("\r" +  " " * 200, end=ending)
         text = title + "\t" + extra_info
-        print(text, end="\r")
+        print(text, end=ending)
 
         if self._pos == self._steps:
             print()

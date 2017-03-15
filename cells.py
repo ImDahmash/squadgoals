@@ -1,7 +1,7 @@
 import tensorflow as tf
 from tensorflow.contrib.rnn import RNNCell, BasicLSTMCell
 
-from utils import batch_matmul
+from utils import *
 
 class LSTMCellWithAtt(RNNCell):
     def __init__(self, H_q, hidden_size):
@@ -25,29 +25,21 @@ class LSTMCellWithAtt(RNNCell):
         return self.hidden_size
 
     def __call__(self, inputs, state, scope=None):
-        scope = scope or type(self).__name__
+        _, h_p = state # Ignore cell state, keep h
 
-        h_p = state[1] # Ignore cell state, keep h
-        print("h_p size:", h_p.get_shape())
+        with tf.variable_scope(type(self).__name__):
+            with tf.variable_scope("weights", initializer = tf.contrib.layers.xavier_initializer()):
+                W_q = tf.get_variable("W_q", [self.hidden_size, self.hidden_size], tf.float32)
+                W_p = tf.get_variable("W_p", [self.hidden_size, self.hidden_size], tf.float32)
+                W_r = tf.get_variable("W_r", [self.hidden_size, self.hidden_size], tf.float32)
+                W = tf.get_variable("W", [self.hidden_size, 1], tf.float32, initializer = tf.contrib.layers.xavier_initializer())
 
-        # Include the state input
-        # import pdb; pdb.set_trace()
+            with tf.variable_scope("biases", initializer = tf.constant_initializer(0.0)):
+                b_p = tf.get_variable("b_p", [self.hidden_size], tf.float32)
+                b = tf.get_variable("b", [1], tf.float32)
 
-        # Split the state if it's a tuple
-
-        with tf.variable_scope(scope):
-            W_q = tf.get_variable("W_q", [self.hidden_size, self.hidden_size], tf.float32, initializer = tf.contrib.layers.xavier_initializer())
-            W_p = tf.get_variable("W_p", [self.hidden_size, self.hidden_size], tf.float32, initializer = tf.contrib.layers.xavier_initializer())
-            W_r = tf.get_variable("W_r", [self.hidden_size, self.hidden_size], tf.float32, initializer = tf.contrib.layers.xavier_initializer())
-            W = tf.get_variable("W", [self.hidden_size, 1], tf.float32, initializer = tf.contrib.layers.xavier_initializer())
-            b_p = tf.get_variable("b_p", [self.hidden_size], tf.float32, initializer = tf.constant_initializer(0.0))
-            b = tf.get_variable("b", [1], tf.float32, initializer = tf.constant_initializer(0.0))
-
-            # Use H_q times W_q
-            # Reshape this
-            H_q = tf.reshape(self.H_q, [self.batch_size * self.Q, self.hidden_size])
-            term1 = tf.matmul(H_q, W_q)
-            term1 = tf.reshape(term1, [self.batch_size, self.Q, self.hidden_size])
+            term1 = batch_matmul(self.H_q, W_q)
+            assert_rank("term1", term1, expected_rank=3)
 
             # Second term
             term2 = tf.matmul(inputs, W_p)
@@ -58,21 +50,14 @@ class LSTMCellWithAtt(RNNCell):
 
             G = tf.nn.tanh(term1 + term2 + term3 + b_p)
             G = tf.reshape(G, [self.batch_size * self.Q, self.hidden_size])
-
-            assert G.get_shape()[1] == self.hidden_size, "G needs hidden_size in last dim, was {}".format(G.get_shape())
-
-            # H_q   = batch x Q x L
-            # alpha = batch x Q x 1
-            # We need to multiply alpha^T H_q
-            # This gives us batch x 1 x L
-            # z_i is batch x 1 x 2L
+            assert_dim("G", G, dim=1, expected_value=self.hidden_size)
 
             # Reshape before multiplication
             alpha = tf.nn.softmax(tf.matmul(G, W) + b)
             alpha = tf.reshape(alpha, [self.batch_size, self.Q, 1])
-            H_q = tf.reshape(H_q, [self.batch_size, self.Q, self.hidden_size])
+            # H_q = tf.reshape(H_q, [self.batch_size, self.Q, self.hidden_size])
 
-            attended = tf.matmul(tf.transpose(alpha, [0, 2, 1]), H_q)
+            attended = tf.matmul(tf.transpose(alpha, [0, 2, 1]), self.H_q)
             # import pdb; pdb.set_trace()
             inputs = tf.reshape(inputs, [self.batch_size, 1, self.hidden_size])
             z_i = tf.concat([inputs, attended], axis=2)
@@ -95,39 +80,38 @@ class AnsPtrCell(RNNCell):
 
     @property
     def state_size(self):
+        """State tuple"""
         return (self._hidden_size, self._hidden_size)
 
     @property
     def output_size(self):
-        raise NotImplementedError("fill this in if we need to")
+        """Returns a probability distribution over the paragraph tokens."""
+        return self._P
 
-    def __call__(self, inputs, state, scope=None, reuse=False):
-        scope = scope or type(self).__name__
-
+    def __call__(self, inputs, state):
         h = state[1]
-        # print("h size:", h.get_shape())
-        # print("state size:", state.get_shape())
 
-        # import pdb; pdb.set_trace()
+        with tf.variable_scope(type(self).__name__):
+            with tf.variable_scope("weights", initializer = tf.contrib.layers.xavier_initializer()):
+                V = tf.get_variable("V", [2*self._hidden_size, self._hidden_size], tf.float32, )
+                W_a = tf.get_variable("W_a", [self._hidden_size, self._hidden_size], tf.float32, initializer = tf.contrib.layers.xavier_initializer())
+                v = tf.get_variable("v", [self._hidden_size, 1], tf.float32, initializer = tf.contrib.layers.xavier_initializer())
 
-        with tf.variable_scope(scope, reuse=reuse):
-            # import pdb; pdb.set_trace()
-            V = tf.get_variable("V", [2*self._hidden_size, self._hidden_size], tf.float32, initializer = tf.contrib.layers.xavier_initializer())
-            W_a = tf.get_variable("W_a", [self._hidden_size, self._hidden_size], tf.float32, initializer = tf.contrib.layers.xavier_initializer())
-            b_a = tf.get_variable("b_a", [self._hidden_size], tf.float32, initializer = tf.constant_initializer(0.0))
-            v = tf.get_variable("v", [self._hidden_size, 1], tf.float32, initializer = tf.contrib.layers.xavier_initializer())
-            c = tf.get_variable("c", [1], tf.float32, initializer = tf.constant_initializer(0.0))
+            with tf.variable_scope("biases", initializer = tf.constant_initializer(0.0)):
+                b_a = tf.get_variable("b_a", [1, self._hidden_size], tf.float32, initializer = tf.constant_initializer(0.0))
+                c = tf.get_variable("c", [1], tf.float32, initializer = tf.constant_initializer(0.0))
 
-            F = tf.nn.tanh(batch_matmul(self._Hr, V) + tf.matmul(h, W_a) + b_a)
-            B = tf.nn.softmax(batch_matmul(F, v) + c)
-            B = tf.reshape(B, [self._batch_size, 1, self._P])
+            x = batch_matmul(self._Hr, V)   # H_r is [batch, P, 2*hidden_size],   V is [2*hidden_size, hidden_size]. Output is [batch_size, P, hidden_size]
+            y = tf.matmul(h, W_a)  # h should be [batch_size, hidden_size],   W_a is [hidden_size, hidden_size] ==> output is [batch_size, 1, hidden_size]
+            y = tf.reshape(y, [self._batch_size, 1, self._hidden_size])
+            z = b_a                # b_a is [hidden_size], should broadcast
+            F = tf.nn.tanh(x + y + z)       # tanh across, get [batch_size, P, hidden_size]
+            B = tf.nn.softmax(batch_matmul(F, v) + c)        # F is [batch_size, P, hidden_size], v is [hidden_size, 1], output is [batch_size, P, 1]
 
-            prod = tf.matmul(B, self._Hr)
-            print("H_r size:", self._Hr.get_shape())    # H_r is size [batchsize, P, 2*L]
+            B = tf.reshape(B, [self._batch_size, self._P, 1])
+
+            prod = tf.matmul(tf.transpose(B, [0, 2, 1]), self._Hr)       # H_r is [batch_size, P, 2*hidden_size],  B is [batch_size, P, 1]. Just make sure B was reshaped before multiply
             prod = tf.reshape(prod, [self._batch_size, 2*self._hidden_size])
-            # import pdb; pdb.set_trace()
 
             _, state = self._cell(prod, state)
-            return B, (state.c, state.h)
-
-            # Output here is the next B
+            return B, (state.c, state.h)    # We want to propagate the B(eta)'s across
