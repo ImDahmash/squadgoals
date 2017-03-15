@@ -74,6 +74,7 @@ class MatchLSTMModel(object):
         # Reshape these out
         B_s = tf.reshape(B_s, [tf.shape(questions)[0], -1])
         B_e = tf.reshape(B_e, [tf.shape(questions)[0], -1])
+        B_s = tf.Print(B_s, [tf.shape(B_s), tf.shape(B_e), tf.shape(self._starts), tf.shape(self._ends)])
 
         loss = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=self._starts, logits=B_s) \
                 + tf.nn.sparse_softmax_cross_entropy_with_logits(labels=self._ends, logits=B_e)
