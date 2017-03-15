@@ -5,13 +5,13 @@ from __future__ import absolute_import
 from functools import lru_cache
 import math
 import os
-import time
 from pprint import pprint
 
 import numpy as np
 import tensorflow as tf
-from tensorflow.contrib.rnn import DropoutWrapper, BasicLSTMCell, GRUCell, MultiRNNCell, RNNCell
+# from tensorflow.contrib.rnn import DropoutWrapper, BasicLSTMCell, GRUCell, MultiRNNCell, RNNCell
 
+from cells import *
 from utils import minibatch_index_iterator, Progress
 
 
@@ -74,79 +74,9 @@ def minibatch_indexes(maxidx, batch_size):
     return batch_idxs
 
 
-
-def batch_matmul(xs, W):
-    shape = tf.shape(xs)
-    W_shape = tf.shape(W)
-    batch_size, m, n = shape[0], shape[1], shape[2]
-    xs_shaped = tf.reshape(xs, [batch_size * m, n])
-    result = tf.matmul(xs_shaped, W)
-    return tf.reshape(result, [batch_size, m, W_shape[1]])
-
 ###############################################################
 #           Model Implementation
 ###############################################################
-
-class LSTMCellWithAtt(RNNCell):
-    def __init__(self, hq, hidden_size):
-        self.hq = hq
-        self.hidden_size = hidden_size
-        self.cell = BasicLSTMCell(self.hidden_size)
-
-    @property
-    def state_size(self):
-        return self.hidden_size
-
-    @property
-    def output_size(self):
-        return self.hidden_size
-
-    def __call__(self, inputs, state, scope=None):
-        scope = scope or type(self).__name__
-
-        with tf.variable_scope(scope):
-            W_q = tf.get_variable("W_q", [self.hidden_size, self.hidden_size], tf.float32, initializer = tf.contrib.layers.xavier_initializer())
-            W_p = tf.get_variable("W_p", [self.hidden_size, self.hidden_size], tf.float32, initializer = tf.contrib.layers.xavier_initializer())
-            W_r = tf.get_variable("W_r", [self.hidden_size, self.hidden_size], tf.float32, initializer = tf.contrib.layers.xavier_initializer())
-            W = tf.get_variable("W", [self.hidden_size, 1], tf.float32, initializer = tf.contrib.layers.xavier_initializer())
-            b_p = tf.get_variable("b_p", [self.hidden_size], tf.float32, initializer = tf.constant_initializer(0.0))
-            b = tf.get_variable("b", [1], tf.float32, initializer = tf.constant_initializer(0.0))
-
-            G = tf.nn.tanh(batch_matmul(self.hq, W_q) + tf.matmul(state, W_p) + tf.matmul(inputs, W_r) + b_p)
-            alpha = tf.nn.softmax(batch_matmul(G, W) + b)
-            # alpha = tf.reshape(alpha, [-1, self.hidden_size])
-            attended = tf.matmul(alpha, self.hq)
-            import pdb; pdb.set_trace()
-            z = tf.concat([tf.expand_dims(inputs, -1), attended], axis=2)
-            return self.cell(z, state)
-
-class AnsPtrCell(RNNCell):
-    def __init__(self, Hr, hidden_size):
-        self._Hr = Hr
-        self._hidden_size = hidden_size
-        self._cell = BasicLSTMCell(hidden_size)
-
-    @property
-    def state_size(self):
-        return self._hidden_size
-
-    @property
-    def output_size(self):
-        raise NotImplementedError("fill this in if we need to")
-
-    def __call__(self, inputs, state, scope=None):
-        scope = scope or type(self).__name__
-        with tf.variable_scope(scope):
-            V = tf.get_variable("V", [2*self._hidden_size, self._hidden_size], tf.float32, initializer = tf.contrib.layers.xavier_initializer())
-            W_a = tf.get_variable("W_a", [self._hidden_size, self._hidden_size], tf.float32, initializer = tf.contrib.layers.xavier_initializer())
-            b_a = tf.get_variable("b_a", [self._hidden_size], tf.float32, tf.constant(0.0))
-            v = tf.get_variable("v", [self._hidden_size], tf.float32, tf.constant_initializer(0.0))
-            c = tf.get_variable("c", [1], tf.float32, tf.constant_initializer(0.0))
-
-            F = tf.nn.tanh(batch_matmul(self._Hr, V) + tf.matmul(state, W_a) + b_a)
-            B = tf.nn.softmax(batch_matmul(F, v) + c)
-            new_h, _ = self._cell(tf.matmul(tf.transpose(B), self._Hr), state)
-            return B, new_h
 
 
 class MatchLSTMModel(object):
@@ -162,7 +92,7 @@ class MatchLSTMModel(object):
         self._embed = tf.Variable(self._load_embeddings(), name="embeddings")
         self._question = tf.placeholder(tf.int32, [None, None], "question_batch")
         self._context = tf.placeholder(tf.int32, [None, None], "context_batch")
-        self._answer = tf.placeholder(tf.int32, [None, None], "labels_batch")
+        self._spans = tf.placeholder(tf.int32, [None, 2], "spans_batch")
         self._qlens = tf.placeholder(tf.int32, [None], "question_lengths")
         self._clens = tf.placeholder(tf.int32, [None], "context_lengths")
 
@@ -192,6 +122,8 @@ class MatchLSTMModel(object):
             encode_cell = cell(self._config.hidden_size)
             H_q, _ = tf.nn.dynamic_rnn(encode_cell, questions, self._qlens, dtype=tf.float32)
 
+        print("H_q shape", H_q.get_shape())
+
         with tf.variable_scope("encode_passage"):
             encode_cell = cell(self._config.hidden_size)
             H_p, _  = tf.nn.dynamic_rnn(encode_cell, contexts, self._clens, dtype=tf.float32)
@@ -205,18 +137,39 @@ class MatchLSTMModel(object):
         with tf.variable_scope("answer_ptr"):
             # Perform decoding
             answer_cell = AnsPtrCell(H_r, self._config.hidden_size)
-            state = tf.zeros(self._config.batch_size, self._config.hidden_size)
-            B1, state = answer_cell(None, state)
-            B2, _ = answer_cell(None, state)
+            state = answer_cell.zero_state(self._config.batch_size, dtype=tf.float32)
+
+            B_s, state = answer_cell(None, state)
+            # Set reuse = True
+            B_e, _ = answer_cell(None, state, reuse=True)
             # ^ I'm relatively certain this is what we're supposed to be doing, take a look
             # at Figure 1(b) but this is how I read it.
 
+        # Reshape these out
+        B_s = tf.reshape(B_s, [self._config.batch_size, -1])
+        B_e = tf.reshape(B_e, [self._config.batch_size, -1])
 
-        # Loss function, equation (12) in the paper.
-        starts = tf.argmax(B1, axis=2)
-        ends = tf.argmax(B2, axis=2)
-        self._loss =  - tf.log(starts) - tf.log(ends) # Loss per thing
-        self._loss = tf.reduce_mean(self._loss)
+        # Loss
+        # Find the correct answer
+        # Find the first correct answer
+        # We know the start and end for each item in the batch
+        starts = self._spans[:, 0]
+        ends = self._spans[:, 1]
+        # import pdb; pdb.set_trace()
+        # a = B_s[:, starts]
+        # b = B_e[:, ends]
+        # self._loss =  - tf.log(a) - tf.log(b) # Loss per thing
+
+        # Per each batch, predicts the start and end tokens
+        # The issue with this I guess is that FUCK
+        self._loss = 0
+        for i in range(self._config.batch_size):
+            beta = B_s[i]
+            # True answer
+            self._loss -= tf.log(beta[starts[i]])
+            self._loss -= tf.log(beta[ends[i]])
+
+        # self._loss = tf.reduce_mean(self._loss)
         self._train_op = tf.train.AdamOptimizer(learning_rate=self._config.lr).minimize(self._loss)
 
         return self  # Return self to allow for chaining
@@ -243,10 +196,21 @@ class MatchLSTMModel(object):
 
 
     def _build_feeds(self, questions, contexts, answers, qlens, clens):
+
+        # Build spans based on the answers
+        batch_size = answers.shape[0]
+        spans = np.zeros([batch_size, 2])
+        for i in range(batch_size):
+            # extract spans
+            line = answers[i]
+            places = np.where(line != 0)[0].tolist()
+            start, end = places[0], places[-1]
+            spans[i] = np.array([start, end])
+
         feeds = {
             self._question: questions,
             self._context: contexts,
-            self._answer: answers,
+            self._spans: spans,
             self._qlens: qlens,
             self._clens: clens,
         }
@@ -291,6 +255,10 @@ def main(_):
             bar = Progress('Epoch {} of {}'.format(epoch + 1, config.epochs), steps=num_batches, width=20)
             for batch, idxs in enumerate(minibatch_index_iterator(num_examples, config.batch_size)):
                 # Read batch_size indexes for constructing training batch
+                if len(idxs) != config.batch_size:
+                    # Batches must be same size for the math to work out.
+                    continue
+
                 qs = questions[idxs]
                 cs = contexts[idxs]
                 ans = answers[idxs]

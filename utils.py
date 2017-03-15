@@ -41,6 +41,15 @@ def compute_once(expensive):
         return value
     return inner
 
+def batch_matmul(xs, W):
+    import tensorflow as tf
+    shape = tf.shape(xs)
+    W_shape = tf.shape(W)
+    xs = tf.reshape(xs, [shape[0] * shape[1], shape[2]])
+    result = tf.matmul(xs, W)
+    return tf.reshape(result, [shape[0], shape[1], W_shape[1]])
+
+
 class Progress(object):
     def __init__(self, title="", width=30, steps='unknown'):
         self._title = title
@@ -77,13 +86,3 @@ class Progress(object):
 
         if self._pos == self._steps:
             print()
-
-
-if __name__ == '__main__':
-    # Test progress
-    x = Progress('Training', width=10, steps=100)
-    import random
-    for i in range(100):
-        num = random.random()
-        x.tick(Loss="{:.7f}".format(num))
-        time.sleep(0.2)
