@@ -2,7 +2,7 @@ from __future__ import print_function
 from __future__ import division
 from __future__ import absolute_import
 
-from functools import lru_cache
+
 import math
 import os
 import time
@@ -12,12 +12,12 @@ import numpy as np
 import tensorflow as tf
 # from tensorflow.contrib.rnn import DropoutWrapper, BasicLSTMCell, GRUCell, MultiRNNCell, RNNCell
 
-from cells import *
+from models import MatchLSTMModel, BiLSTMModel
 from utils import minibatch_index_iterator, Progress
 
 
 # tfdbg tensorflow debugger
-from tensorflow.python import debug as tf_debug
+# from tensorflow.python import debug as tf_debug
 
 
 ###############################################################
@@ -41,6 +41,7 @@ tf.flags.DEFINE_integer('embed_dim', 100, 'embedding dimension')
 tf.flags.DEFINE_integer('epochs', 10, 'number of epochs for training')
 tf.flags.DEFINE_integer('layers', 2, 'number of hidden layers')
 
+tf.flags.DEFINE_string('model', 'match', 'type of model, either "match" for Match-LSTM w/Answer Pointer or "bilstm" for simple BiLSTM baseline.')
 tf.flags.DEFINE_string('cell_type', 'lstm', "Cell type for RNN")
 tf.flags.DEFINE_float('lr', 0.01, 'learning rate')
 
@@ -52,6 +53,7 @@ tf.flags.DEFINE_string('embed_path', 'data/squad/glove.squad.100d.npy', "Path to
 tf.flags.DEFINE_string('train_path', 'data/squad/train.npz', "Path to training data as an .npz file")
 tf.flags.DEFINE_string('val_path', 'data/squad/val.npz', "Path to validation data as an .npz file")
 tf.flags.DEFINE_string('save_dir', 'save', 'directory to save model checkpoints after each epoch')
+
 
 """
 Utilities
@@ -84,130 +86,6 @@ def minibatch_indexes(maxidx, batch_size):
 ###############################################################
 
 
-class MatchLSTMModel(object):
-    """Simple RNN model for SQuAD that uses BiLSTMs.
-    """
-    def __init__(self, config):
-
-        # Setup configuration
-        self._config = config
-
-        # configure model variables
-        # load GloVe embedding
-        self._embed = tf.Variable(self._load_embeddings(), name="embeddings", trainable=False)
-        self._question = tf.placeholder(tf.int32, [None, None], "question_batch")
-        self._context = tf.placeholder(tf.int32, [None, None], "context_batch")
-        self._starts = tf.placeholder(tf.int32, [None], "spans_batch")
-        self._ends = tf.placeholder(tf.int32, [None], "spans_batch")
-        self._qlens = tf.placeholder(tf.int32, [None], "question_lengths")
-        self._clens = tf.placeholder(tf.int32, [None], "context_lengths")
-
-        self._predictions = None
-        self._loss = None
-        self._train_op = None
-
-    @lru_cache()
-    def _load_embeddings(self):
-        # Lazy compute the embedding matrix
-        print("Loading GloVe vectors from {}".format(self._config.embed_path))
-        return np.load(self._config.embed_path)
-
-    def build_graph(self):
-        # Add an embeddings layer
-        questions = self._build_embedded(self._question)
-        contexts = self._build_embedded(self._context)
-
-        # Cell type based on config
-        if self._config.cell_type == "lstm":
-            cell = BasicLSTMCell
-        elif self._config.cell_type == "gru":
-            cell = GRUCell
-
-        # Get a representation of the questions
-        with tf.variable_scope("encode_question"):
-            encode_cell = cell(self._config.hidden_size)
-            H_q, _ = tf.nn.dynamic_rnn(encode_cell, questions, self._qlens, dtype=tf.float32)
-
-        print("H_q shape", H_q.get_shape())
-
-        with tf.variable_scope("encode_passage"):
-            encode_cell = cell(self._config.hidden_size)
-            H_p, _  = tf.nn.dynamic_rnn(encode_cell, contexts, self._clens, dtype=tf.float32)
-
-            attention_cell = LSTMCellWithAtt(H_q, self._config.hidden_size)
-            H_r, _ = tf.nn.bidirectional_dynamic_rnn(attention_cell, attention_cell,
-                                                     H_p, sequence_length=self._clens,
-                                                     dtype=tf.float32)
-            H_r = tf.concat(H_r, axis=2)
-            print("H_r shape: ", H_r.get_shape())
-
-        with tf.variable_scope("answer_ptr"):
-            # Perform decoding
-            answer_cell = AnsPtrCell(H_r, self._config.hidden_size)
-            state = answer_cell.zero_state(self._config.batch_size, dtype=tf.float32)
-
-            B_s, state = answer_cell(None, state)
-            tf.get_variable_scope().reuse_variables()
-            B_e, _ = answer_cell(None, state)
-            # ^ I'm relatively certain this is what we're supposed to be doing, take a look
-            # at Figure 1(b) but this is how I read it.
-
-        # Reshape these out
-        B_s = tf.reshape(B_s, [self._config.batch_size, -1])
-        B_e = tf.reshape(B_e, [self._config.batch_size, -1])
-
-        loss = 0.0
-        loss += tf.nn.sparse_softmax_cross_entropy_with_logits(labels=self._starts, logits=B_s)
-        loss += tf.nn.sparse_softmax_cross_entropy_with_logits(labels=self._ends, logits=B_e)
-        self._loss = tf.Print(tf.reduce_mean(loss), [B_s, B_e, tf.shape(B_s), tf.shape(B_e)])
-
-        # self._loss = tf.reduce_mean(self._loss)
-        self._train_op = tf.train.AdamOptimizer(learning_rate=self._config.lr).minimize(self._loss)
-
-        return self  # Return self to allow for chaining
-
-    def train(self, questions, contexts, answers, qlens, clens, sess=None):
-        if sess is None:
-            sess = tf.get_default_session()
-        feeds = self._build_feeds(questions, contexts, answers, qlens, clens)
-        _, loss = sess.run([self._train_op, self._loss], feed_dict=feeds)
-        return loss
-
-    def evaluate(self, questions, contexts, answers, qlens, clens, sess=None):
-        if sess is None:
-            sess = tf.get_default_session()
-        feeds = self._build_feeds(questions, contexts, answers, qlens, clens)
-        loss = sess.run(self._loss, feed_dict=feeds)
-        return loss
-
-    def _build_embedded(self, ids, dtype=tf.float32):
-        # Find pre-trained embeddings on disk
-        embed = tf.nn.embedding_lookup(self._embed, ids)
-        embed = tf.reshape(embed, [tf.shape(ids)[0], tf.shape(ids)[1], self._config.embed_dim])
-        return tf.cast(embed, dtype=dtype)
-
-
-    def _build_feeds(self, questions, contexts, answers, qlens, clens):
-        # Build spans based on the answers
-        batch_size = answers.shape[0]
-        spans = np.zeros([batch_size, 2])
-        for i in range(batch_size):
-            line = answers[i]
-            places = np.where(line != 0)[0].tolist()
-            start, end = places[0], places[-1]
-            spans[i] = np.array([start, end])
-
-        feeds = {
-            self._question: questions,
-            self._context: contexts,
-            self._starts: spans[:, 0],
-            self._ends: spans[:, 1],
-            self._qlens: qlens,
-            self._clens: clens,
-        }
-        return feeds
-
-
 def main(_):
     with tf.Session().as_default() as sess:
         # sess = tf_debug.LocalCLIDebugWrapperSession(sess)   # DEbugging
@@ -219,7 +97,10 @@ def main(_):
 
         # Time building the graph
         tic = time.time()
-        model = MatchLSTMModel(config).build_graph()
+        if tf.flags.FLAGS.model == "match":
+            model = MatchLSTMModel(config).build_graph()
+        else:
+            model = BiLSTMModel(config).build_graph()
         toc = time.time()
         print("Took {:.2f}s to build graph.".format(toc - tic))
 
@@ -278,6 +159,9 @@ def main(_):
             # Save the model
             saver.save(sess, save_path, global_step=epoch)
             writer = tf.summary.FileWriter("save", sess.graph, flush_secs=5)
+
+            summ = tf.summary.scalar(1.0)
+            writer.add_summary(summ)
             writer.flush()
 
         # Write the losses out to a file for later

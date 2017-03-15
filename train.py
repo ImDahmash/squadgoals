@@ -1,180 +1,173 @@
-import logging
+from __future__ import print_function
+from __future__ import division
+from __future__ import absolute_import
+
+
 import math
-import sys
-from importlib import import_module
+import os
+import time
+from pprint import pprint
 
 import numpy as np
 import tensorflow as tf
-from tensorflow.python.platform import gfile
-from tqdm import tqdm
+# from tensorflow.contrib.rnn import DropoutWrapper, BasicLSTMCell, GRUCell, MultiRNNCell, RNNCell
 
-from core import Config, SquadModel
-from utils import minibatch_index_iterator
-
-logging.getLogger().setLevel(logging.INFO)
+from models import MatchLSTMModel, BiLSTMModel
+from utils import minibatch_index_iterator, Progress
 
 
-def load_class(clsname):
-    """
-    Loads a model that is a subtype of SquadModel. @clsname@ gives the fully qualified Python
-    package path to the model we wish to run.
-    """
-    try:
-        pkg, cls = None, None
-        if "." in clsname:
-            components = clsname.split(".")
-            pkg = ".".join(components[:-1])
-            cls = components[-1]
-            logging.info("loading package {}".format(pkg))
-            p = import_module(pkg)
-            logging.info("loading class {}".format(cls))
-            return getattr(p, cls)
-        else:
-            logging.info("direct loading {}".format(cls))
-            return globals()[clsname]
-    except AttributeError or KeyError:
-        logging.fatal("Error! Could not load class {}".format(clsname))
-        sys.exit(-1)
+# tfdbg tensorflow debugger
+# from tensorflow.python import debug as tf_debug
 
 
-def train_model(model):
-    logging.info("Loading training data...")
-    train_data = np.load(tf.flags.FLAGS.data_path)
-    question = train_data["question"]
-    context = train_data["context"]
-    answer = train_data["answer"]
-    question_lens = train_data["question_lens"]
-    context_lens = train_data["context_lens"]
-    num_training_examples = context.shape[0]
-    batch_size = tf.flags.FLAGS.batch_size
-    num_batches = math.ceil(num_training_examples / batch_size)
+###############################################################
+#       Code to setup the environment, configuration, etc.
+###############################################################
 
-    # Load full GloVe matrix
-    glove_mat = np.load(tf.flags.FLAGS.embed_path)
-
-    # Create save_dir for checkpointing if it does not already exist
-    if not gfile.Exists(tf.flags.FLAGS.save_dir):
-        gfile.MakeDirs(tf.flags.FLAGS.save_dir)
-
-    with tf.Session().as_default() as sess:
-        sess.run(tf.global_variables_initializer())
-
-        params = tf.trainable_variables()
-        num_params = sum(map(lambda t: np.prod(tf.shape(t.value()).eval()), params))
-        logging.info("Number of trainable parameters: {}".format(num_params))
-
-        for epoch in range(tf.flags.FLAGS.epochs):
-
-            # Read a random batch of data
-            epoch_num = epoch + 1
-            # Store all of the training set in memory (yikes?)
-            logging.info("epoch {} of {}".format(epoch_num, tf.flags.FLAGS.epochs))
-
-            # We want to return a set of indexes
-            batches = tqdm(minibatch_index_iterator(num_training_examples, batch_size), unit="batch", total=num_batches)
-            losses = []
-            for batch_idxs in batches:
-                question_batch = question[batch_idxs]
-                context_batch = context[batch_idxs]
-                answer_batch = answer[batch_idxs]
-                c_lens = context_lens[batch_idxs]
-                q_lens = question_lens[batch_idxs]
-
-                loss = model.train_batch(question_batch,
-                                         context_batch,
-                                         answer_batch,
-                                         q_lens,
-                                         c_lens,
-                                         glove_mat)
-                losses.append(loss)
-                fmt_loss = "{:.6f}".format(loss)
-                avg_loss = np.sum(losses) / len(losses)
-                fmt_avg_loss = "{:.6f}".format(avg_loss)
-                batches.set_postfix(loss=fmt_loss, avg=fmt_avg_loss)
-
-            loss = np.sum(losses) / len(losses)
-            logging.info("epoch={:03d} loss={}".format(epoch_num, loss))
-
-            if epoch % tf.flags.FLAGS.checkpoint_freq == 0:
-                # Perform evaluation on the smaller dev set.
-                model.checkpoint(tf.flags.FLAGS.save_dir)
+"""
+Global Variables                               #
+"""
+GLOVE_PATH = "data/squad/glove.squad.100d.npy"
+TRAIN_PATH = "data/squad/train.npz"
+VAL_PATH = "data/squad/val.npz"
 
 
-def eval_model(model):
-    with tf.Session().as_default() as sess:
-        model.restore_from_checkpoint(tf.flags.FLAGS.save_dir)
-        logging.info("Loading training data...")
-        eval_data = np.load(tf.flags.FLAGS.data_path)
-        question = eval_data["question"]
-        context = eval_data["context"]
-        answer = eval_data["answer"]
-        num_training_examples = context.shape[0]
-        batch_size = tf.flags.FLAGS.batch_size
+"""
+Configuration options:
+"""
+tf.flags.DEFINE_integer('hidden_size', 200, "Size of hidden states for encoder")
+tf.flags.DEFINE_integer('batch_size', 30, 'size of mini-batches')
+tf.flags.DEFINE_integer('embed_dim', 100, 'embedding dimension')
+tf.flags.DEFINE_integer('epochs', 10, 'number of epochs for training')
+tf.flags.DEFINE_integer('layers', 2, 'number of hidden layers')
 
-        # Create save_dir for checkpointing if it does not already exist
-        if not gfile.Exists(tf.flags.FLAGS.save_dir):
-            gfile.MakeDirs(tf.flags.FLAGS.save_dir)
+tf.flags.DEFINE_string('model', 'match', 'type of model, either "match" for Match-LSTM w/Answer Pointer or "bilstm" for simple BiLSTM baseline.')
+tf.flags.DEFINE_string('cell_type', 'lstm', "Cell type for RNN")
+tf.flags.DEFINE_float('lr', 0.01, 'learning rate')
 
-        sess.run(tf.global_variables_initializer())
-        batches = minibatch_index_iterator(num_training_examples, batch_size)
-        for batch_idxs in batches:
-            question_batch = question[batch_idxs]
-            context_batch = context[batch_idxs]
-            answer_batch = answer[batch_idxs]
-            loss = model.predict(question_batch, context_batch, answer_batch)
-            logging.info("loss: {}".format(loss))
+tf.flags.DEFINE_string('optim', 'adam', 'Optimizer, one of "adam", "adadelta", "sgd"')
+
+tf.flags.DEFINE_integer('subset', 0, 'If > 0, only trains on a subset of the train data of given size')
+
+tf.flags.DEFINE_string('embed_path', 'data/squad/glove.squad.100d.npy', "Path to a .npy file holding the GloVe vectors")
+tf.flags.DEFINE_string('train_path', 'data/squad/train.npz', "Path to training data as an .npz file")
+tf.flags.DEFINE_string('val_path', 'data/squad/val.npz', "Path to validation data as an .npz file")
+tf.flags.DEFINE_string('save_dir', 'save', 'directory to save model checkpoints after each epoch')
+
+
+"""
+Utilities
+"""
+
+
+def load_data(path):
+    data = np.load(path)
+
+    questions = data["question"]
+    contexts = data["context"]
+    answers = data["answer"]
+
+    questions_lens = data["question_lens"]
+    contexts_lens = data["context_lens"]
+
+    return questions, contexts, answers, questions_lens, contexts_lens
+
+def minibatch_indexes(maxidx, batch_size):
+    # Perform random batch ordering
+    order = np.random.permutation(maxidx)
+    batch_idxs = []
+    for i in range(0, maxidx, batch_size):
+        batch_idxs.append(order[i:i + batch_size])
+    return batch_idxs
+
+
+###############################################################
+#           Model Implementation
+###############################################################
 
 
 def main(_):
-    # Load and initialize the model
-    model_class = load_class(tf.flags.FLAGS.model)
-    if not issubclass(model_class, SquadModel):
-        logging.fatal("Error! Given model {} is not an instance of core.SquadModel.".format(tf.flags.FLAGS.model))
-        sys.exit(-1)
+    with tf.Session().as_default() as sess:
+        # sess = tf_debug.LocalCLIDebugWrapperSession(sess)   # DEbugging
 
-    # Load GloVe vectors
-    glove_mat = np.load(tf.flags.FLAGS.embed_path)
+        # Train the model
+        config = tf.flags.FLAGS
+        print("Configuration:")
+        pprint(tf.flags.FLAGS.__dict__['__flags'], indent=4)
 
-    # Configure the model and build the graph
-    config = Config(dict(
-        max_length=tf.flags.FLAGS.max_length,
-        keep_prob=tf.flags.FLAGS.keep_prob,
-        num_classes=2,
-        embed_size=tf.flags.FLAGS.embed_size,
-        hidden_size=tf.flags.FLAGS.hidden_size,
-        cell_type=tf.flags.FLAGS.cell_type,
-        save_dir=tf.flags.FLAGS.save_dir
-    ))
-    model = model_class(glove_mat)
-    model.initialize_graph(config)
+        # Time building the graph
+        tic = time.time()
+        if tf.flags.FLAGS.model == "match":
+            model = MatchLSTMModel(config).build_graph()
+        else:
+            model = BiLSTMModel(config).build_graph()
+        toc = time.time()
+        print("Took {:.2f}s to build graph.".format(toc - tic))
 
-    mode = tf.flags.FLAGS.mode
+        sess.run(tf.global_variables_initializer())
 
-    if mode == "train":
-        train_model(model)
-    elif mode == "eval":
-        eval_model(model)
+        print("Number of parameters in the model: {}".format(len(tf.trainable_variables())))
+
+        questions, contexts, answers, q_lens, c_lens = load_data(config.train_path)
+
+        # Load validation set data to find test loss after each epoch
+        val_qs, val_cs, val_as, val_q_lens, val_c_lens = load_data(config.val_path)
+
+        num_examples = config.subset if config.subset > 0 else questions.shape[0]
+        total_params = sum(v.get_shape().num_elements() for v in tf.trainable_variables())
+        print("Total params: {}".format(total_params))
+
+
+        # Setup saving
+        saver = tf.train.Saver()
+        save_path = os.path.join(config.save_dir, "model")
+        if not tf.gfile.Exists(config.save_dir):
+            tf.gfile.MakeDirs(config.save_dir)
+
+        # Perform training pass
+        epoch_losses = []
+        for epoch in range(config.epochs):
+            num_batches = math.ceil(num_examples / config.batch_size)
+            losses = []
+
+            # Create progress bar over this
+            bar = Progress('Epoch {} of {}'.format(epoch + 1, config.epochs), steps=num_batches, width=20, sameline=False)
+            for batch, idxs in enumerate(minibatch_index_iterator(num_examples, config.batch_size)):
+                # Read batch_size indexes for constructing training batch
+                if len(idxs) != config.batch_size:
+                    # Batches are expected to be the same size.
+                    continue
+                qs = questions[idxs]
+                cs = contexts[idxs]
+                ans = answers[idxs]
+                q_ls = q_lens[idxs]
+                c_ls = c_lens[idxs]
+
+                # Perform train step
+                loss = model.train(qs, cs, ans, q_ls, c_ls)
+                losses.append(loss)
+
+                # Calculate some stats to print
+                bar.tick(loss=loss, avg=np.average(losses), hi=max(losses), lo=min(losses))
+                saver.save(sess, save_path, global_step=epoch)
+            avg_loss = np.average(losses)
+            epoch_losses.append(avg_loss)
+            print("\n--- Epoch {} Average Train Loss: {:.7f}".format(epoch + 1, avg_loss))
+            # Run validation, get validation loss
+            val_loss = model.evaluate(val_qs, val_cs, val_as, val_q_lens, val_c_lens)
+            print("  \ Validation Loss: {:.7f}".format(val_loss))
+            # Save the model
+            saver.save(sess, save_path, global_step=epoch)
+            writer = tf.summary.FileWriter("save", sess.graph, flush_secs=5)
+
+            summ = tf.summary.scalar(1.0)
+            writer.add_summary(summ)
+            writer.flush()
+
+        # Write the losses out to a file for later
+        print("Saving statistics...")
+        np.save("statistics.npz", epoch_losses=epoch_losses)
 
 
 if __name__ == '__main__':
-    # Setup arguments
-    tf.flags.DEFINE_string("mode", "train", "Mode to run in, either \"train\" or \"eval\"")
-    tf.flags.DEFINE_string("model", "models.baseline.BaselineModel", "full Python package path to a SquadModel")
-    tf.flags.DEFINE_string("cell_type", "lstm", "type of RNN cell for training (either 'lstm' or 'gru'")
-
-    # Training flags
-    tf.flags.DEFINE_integer("epochs", 50, "number of epochs of training")
-    tf.flags.DEFINE_integer("checkpoint_freq", 1, "epochs of training between re-evaluating and saving model")
-    tf.flags.DEFINE_integer("max_length", 250, "maximum length of context passages (in tokens)")
-    tf.flags.DEFINE_integer("hidden_size", 20, "size of the hidden state for the RNN cell")
-    tf.flags.DEFINE_integer("embed_size", 100, "dimensionality of embedding")
-    tf.flags.DEFINE_integer("batch_size", 30, "size of minibatches")
-
-    tf.flags.DEFINE_float("keep_prob", 0.99, "inverse of drop probability")
-
-    tf.flags.DEFINE_string("data_path", "data/squad/train.npz", "Path to .npz file holding the eval/training matrices")
-    tf.flags.DEFINE_string("save_dir", "save", "path to save training results and model checkpoints")
-    tf.flags.DEFINE_string("embed_path", "data/squad/glove.squad.100d.npy", "path to npy file holding trimmed embeddings")
-
-    # Execute main() above, see tf.app documentation for details.
-    tf.app.run()
+    tf.app.run(main=main)
