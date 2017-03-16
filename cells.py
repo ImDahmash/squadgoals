@@ -140,21 +140,26 @@ class AnsPtrCell(RNNCell):
 ######################################
 
 def test_lstmwithatt():
-    BATCH_SIZE, Q, HIDDEN_SIZE = [20, 300, 50]
+    BATCH_SIZE, Q, HIDDEN_SIZE = [10, 300, 50]
     with tf.Session().as_default() as sess:
         with tf.variable_scope("testing"):
             H_q = tf.random_normal([BATCH_SIZE, Q, HIDDEN_SIZE], dtype=tf.float32)
             cell = LSTMCellWithAtt(H_q, HIDDEN_SIZE)
-            H_p = tf.random_normal([1, HIDDEN_SIZE], dtype=tf.float32)
-            state = cell.zero_state(1, dtype=tf.float32)
-            out, state = cell(H_p, state)
+            h_p = tf.random_normal([BATCH_SIZE, HIDDEN_SIZE], dtype=tf.float32)
+            state = cell.zero_state(BATCH_SIZE, dtype=tf.float32)
+            out, state = cell(h_p, state)
 
         sess.run(tf.global_variables_initializer())
         output, h_f = sess.run([out, state])
-        assert h_f.shape == []
+        assert h_f[1].shape == (BATCH_SIZE, HIDDEN_SIZE), "Actual shape: {}".format(h_f[1].shape)
 
 def test_ansptr():
     BATCH_SIZE, P, HIDDEN_SIZE = [20, 300, 50]
+
+    def softmax(x):
+        x = np.exp(x)
+        x /= np.sum(x, axis=1, keepdims=True)
+        return x
 
     with tf.Session().as_default() as sess:
         with tf.variable_scope("testing"):
@@ -168,8 +173,8 @@ def test_ansptr():
 
         sess.run(tf.global_variables_initializer())
         B1, s1, B2, s2 = sess.run([B1, s1, B2, s2])
-        assert np.allclose(np.sum(B1, axis=1), 1.0), "Beta1 rows must sum to 1"
-        assert np.allclose(np.sum(B2, axis=1), 1.0), "Beta2 rows must sum to 1"
+        assert np.allclose(np.sum(softmax(B1), axis=1), 1.0), "Beta1 rows must sum to 1"
+        assert np.allclose(np.sum(softmax(B2), axis=1), 1.0), "Beta2 rows must sum to 1"
 
 
 # Run the tests when called from command line
