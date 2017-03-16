@@ -157,7 +157,7 @@ def tokens_to_ids(source_file, word_to_id, max_len=None, useindexes=None):
     logging.info("Building the unrolled np array...")
     for i, sequence in enumerate(tqdm(sequences)):
         for t, token_id in enumerate(sequence):
-            processed[i, 0:lengths[i]] = token_id
+            processed[i, t] = token_id
 
     return processed, indexes, lengths
 
