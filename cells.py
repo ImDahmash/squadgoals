@@ -43,15 +43,12 @@ class LSTMCellWithAtt(RNNCell):
 
             # Second term
             term2 = tf.matmul(inputs, W_p)
-            term2 = tf.reshape(term2, [self.batch_size, 1, self.hidden_size])
+            term2 = tf.expand_dims(term2, axis=1)
 
             term3 = tf.matmul(h_p, W_r)
-            term3 = tf.reshape(term3, [self.batch_size, 1, self.hidden_size])
-
-            # term3 = tf.Print(term3, [term3])
+            term3 = tf.expand_dims(term3, axis=1)
 
             total = term1 + term2 + term3 + b_p
-            # total = tf.Print(total, [total, tf.shape(total)])
 
             G = tf.nn.tanh(total)
             G = tf.reshape(G, [self.batch_size * self.Q, self.hidden_size])
@@ -59,15 +56,13 @@ class LSTMCellWithAtt(RNNCell):
 
             # Reshape before multiplication
             alpha = tf.nn.softmax(tf.matmul(G, W) + b)
-            alpha = tf.reshape(alpha, [self.batch_size, self.Q, 1])
-            # H_q = tf.reshape(H_q, [self.batch_size, self.Q, self.hidden_size])
+            alpha = tf.reshape(alpha, [self.batch_size, 1, self.Q])
 
-            attended = tf.matmul(tf.transpose(alpha, [0, 2, 1]), self.H_q)
-            # import pdb; pdb.set_trace()
+            attended = tf.matmul(alpha, self.H_q)
             inputs = tf.reshape(inputs, [self.batch_size, 1, self.hidden_size])
             z_i = tf.concat([inputs, attended], axis=2)
             z_i = tf.reshape(z_i, [self.batch_size, 2*self.hidden_size])
-            # Unroll this shit
+
             output, states = self.cell(z_i, state)
             return output, (states.c, states.h)
 

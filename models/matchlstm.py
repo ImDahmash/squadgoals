@@ -71,9 +71,9 @@ class MatchLSTMModel(object):
             # Perform decoding
             # Create mask of dimension [batch_size, P, 1] that is used to scale the probabilities
             # and eliminate OOB predictions.
-            mask = tf.zeros([batch_size, P, 1])  # Size of the batch
+            # mask = tf.zeros([batch_size, P, 1])  # Size of the batch
 
-            answer_cell = AnsPtrCell(H_r, self._config.hidden_size, mask=mask)
+            answer_cell = AnsPtrCell(H_r, self._config.hidden_size, mask=self._mask)
             state = answer_cell.zero_state(batch_size, dtype=tf.float32)
 
             # B_s and B_e are unscaled logits of the actual distribution.
