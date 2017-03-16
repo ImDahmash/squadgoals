@@ -29,7 +29,9 @@ class MatchLSTMModel(object):
         self._clens = tf.placeholder(tf.int32, [None], "context_lengths")
         self._mask = tf.placeholder(tf.float32, [None, None, 1], "mask")
 
-        self._predictions = None
+        self.B_s = None
+        self.B_e = None
+
         self._loss = None
         self._train_op = None
 
@@ -43,7 +45,7 @@ class MatchLSTMModel(object):
         # Add an embeddings layer
         questions = self._build_embedded(self._question)
         contexts = self._build_embedded(self._context)
-        batch_size, P = tf.shape(questions)[0], tf.shape(contexts)[1]
+        batch_size = tf.shape(questions)[0]
 
         # Cell type based on config
         if self._config.cell_type == "lstm":
@@ -68,11 +70,6 @@ class MatchLSTMModel(object):
             assert_dim("H_r", H_r, dim=2, expected_value = 2*self._config.hidden_size)
 
         with tf.variable_scope("answer_ptr"):
-            # Perform decoding
-            # Create mask of dimension [batch_size, P, 1] that is used to scale the probabilities
-            # and eliminate OOB predictions.
-            # mask = tf.zeros([batch_size, P, 1])  # Size of the batch
-
             answer_cell = AnsPtrCell(H_r, self._config.hidden_size, mask=self._mask)
             state = answer_cell.zero_state(batch_size, dtype=tf.float32)
 
@@ -80,6 +77,10 @@ class MatchLSTMModel(object):
             B_s, state = answer_cell(None, state)
             tf.get_variable_scope().reuse_variables()
             B_e, _ = answer_cell(None, state)
+
+        # Save these for predicting later, only calculated when we force them for .predict()
+        self.B_s = tf.nn.softmax(B_s)
+        self.B_e = tf.nn.softmax(B_e)
 
         loss = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=self._starts, logits=B_s) \
                 + tf.nn.sparse_softmax_cross_entropy_with_logits(labels=self._ends, logits=B_e)
@@ -94,6 +95,12 @@ class MatchLSTMModel(object):
         _, loss = sess.run([self._train_op, self._loss], feed_dict=feeds)
         return loss
 
+    def predict(self, questions, contexts, qlens, clens, sess=None):
+        if sess is None:
+            sess = tf.get_default_session()
+        feeds = self._build_feeds(questions, contexts, None, qlens, clens)
+        B_s_logits, B_e_logits = sess.run([self.B_s, self.B_e], feed_dict=feeds)
+
     def evaluate(self, questions, contexts, answers, qlens, clens, sess=None):
         if sess is None:
             sess = tf.get_default_session()
@@ -102,39 +109,34 @@ class MatchLSTMModel(object):
         return loss
 
     def _build_embedded(self, ids, dtype=tf.float32):
-        # Find pre-trained embeddings on disk
         embed = tf.nn.embedding_lookup(self._embed, ids)
         embed = tf.reshape(embed, [tf.shape(ids)[0], tf.shape(ids)[1], self._config.embed_dim])
         return tf.cast(embed, dtype=dtype)
 
-
     def _build_feeds(self, questions, contexts, answers, qlens, clens):
-        # Build spans based on the answers
-        batch_size = answers.shape[0]
-        spans = np.zeros([batch_size, 2])
-        for i in range(batch_size):
-            line = answers[i]
-            places = np.where(line != 0)[0].tolist()
-            start, end = places[0], places[-1]
-            spans[i] = np.array([start, end])
-
-        # Mask out lengths
-        mask = np.zeros([batch_size, contexts.shape[1], 1])
-        for i in range(batch_size):
-            start, end = int(spans[i, 0]), int(spans[i, 1])
-            # print("start={} end={}".format(start, end))
-            mask[i, start:end+1] = np.array([1])
-
-        # import pdb; pdb.set_trace()
-        # print(mask)
-
         feeds = {
             self._question: questions,
             self._context: contexts,
-            self._starts: spans[:, 0],
-            self._ends: spans[:, 1],
-            self._mask: mask,
             self._qlens: qlens,
             self._clens: clens,
         }
+
+        if answers is not None:
+            batch_size = answers.shape[0]
+            spans = np.zeros([batch_size, 2])
+            for i in range(batch_size):
+                line = answers[i]
+                places = np.where(line != 0)[0].tolist()
+                start, end = places[0], places[-1]
+                spans[i] = np.array([start, end])
+
+            # Mask out lengths
+            mask = np.zeros([batch_size, contexts.shape[1], 1])
+            for i in range(batch_size):
+                start, end = int(spans[i, 0]), int(spans[i, 1])
+                mask[i, start:end+1] = np.array([1])
+
+            feeds[self._starts] = spans[:, 0]
+            feeds[self._ends] = spans[:, 1]
+            feeds[self._mask] = mask
         return feeds

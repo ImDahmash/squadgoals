@@ -54,6 +54,7 @@ tf.flags.DEFINE_string('train_path', 'data/squad/train.npz', "Path to training d
 tf.flags.DEFINE_string('val_path', 'data/squad/val.npz', "Path to validation data as an .npz file")
 tf.flags.DEFINE_string('save_dir', 'save', 'directory to save model checkpoints after each epoch')
 
+tf.flags.DEFINE_boolean('resume', False, 'Resume from latest checkpoint in save_dir when flags is passed. Default is not to')
 
 """
 Utilities
@@ -124,6 +125,13 @@ def main(_):
         if not tf.gfile.Exists(config.save_dir):
             tf.gfile.MakeDirs(config.save_dir)
 
+        # If we want to restore then try it
+        # Resume training
+        if tf.flags.FLAGS.resume:
+            latest = tf.train.latest_checkpoint(config.save_dir)
+            print("Restoring from {}  ...".format(latest))
+            saver.restore(sess, latest)
+
         # Perform training pass
         epoch_losses = []
         for epoch in range(config.epochs):
@@ -151,10 +159,10 @@ def main(_):
             epoch_losses.append(avg_loss)
             print("\n--- Epoch {} Average Train Loss: {:.7f}".format(epoch + 1, avg_loss))
             # Run validation, get validation loss
-            # val_loss = model.evaluate(val_qs, val_cs, val_as, val_q_lens, val_c_lens)
-            # print("  \ Validation Loss: {:.7f}".format(val_loss))
+            val_loss = model.evaluate(val_qs, val_cs, val_as, val_q_lens, val_c_lens)
+            print("  \ Validation Loss: {:.7f}".format(val_loss))
             # Save the model
-            # saver.save(sess, save_path, global_step=epoch)
+            saver.save(sess, save_path, global_step=epoch)
 
         # Write the losses out to a file for later
         print("Saving statistics...")
