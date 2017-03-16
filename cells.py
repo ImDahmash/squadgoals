@@ -125,7 +125,7 @@ class AnsPtrCell(RNNCell):
 
             # B = softmax(F_k v + c)
             s = batch_matmul(F, v) + c
-            s = s * self._mask
+            B_logits = s * self._mask
             B = tf.nn.softmax(s, dim=1)
             # B = tf.Print(B, [B], summarize=100)
             B = tf.reshape(B, [-1, 1, self._P])
@@ -136,8 +136,8 @@ class AnsPtrCell(RNNCell):
             cell_in = tf.reshape(cell_in, [-1, 2*self._hidden_size])
             _, state = self._cell(cell_in, state)
 
-            B = tf.reshape(B, [-1, self._P])
-            return B, (state.c, state.h)
+            B_logits = tf.reshape(s, [-1, self._P])
+            return B_logits, (state.c, state.h)
 
 
 ######################################

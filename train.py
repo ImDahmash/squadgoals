@@ -35,7 +35,7 @@ VAL_PATH = "data/squad/val.npz"
 """
 Configuration options:
 """
-tf.flags.DEFINE_integer('hidden_size', 200, "Size of hidden states for encoder")
+tf.flags.DEFINE_integer('hidden_size', 300, "Size of hidden states for encoder")
 tf.flags.DEFINE_integer('batch_size', 30, 'size of mini-batches')
 tf.flags.DEFINE_integer('embed_dim', 100, 'embedding dimension')
 tf.flags.DEFINE_integer('epochs', 10, 'number of epochs for training')
@@ -142,7 +142,6 @@ def main(_):
 
                 # Perform train step
                 loss = model.train(qs, cs, ans, q_ls, c_ls)
-                print("loss", loss)
                 losses.append(loss)
 
                 # Calculate some stats to print
@@ -159,7 +158,7 @@ def main(_):
 
         # Write the losses out to a file for later
         print("Saving statistics...")
-        np.save("statistics.npz", epoch_losses=epoch_losses)
+        np.savez("statistics.npz", epoch_losses=epoch_losses)
 
 
 if __name__ == '__main__':
