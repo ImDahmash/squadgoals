@@ -134,6 +134,7 @@ def main(_):
 
         # Perform training pass
         epoch_losses = []
+        print("Begin training!")
         for epoch in range(config.epochs):
             num_batches = math.ceil(num_examples / config.batch_size)
             losses = []
@@ -149,11 +150,16 @@ def main(_):
                 c_ls = c_lens[idxs]
 
                 # Perform train step
-                loss = model.train(qs, cs, ans, q_ls, c_ls)
+                loss, norm = model.train(qs, cs, ans, q_ls, c_ls, norms=True)
                 losses.append(loss)
 
+                if batch % 100 == 0:
+                    # Perform batches of size 30
+                    val_loss = model.evaluate(val_qs, val_cs, val_as, val_q_lens, val_c_lens)
+                    print("  \ Validation Loss: {:.7f}".format(val_loss))
+
                 # Calculate some stats to print
-                bar.tick(loss=loss, avg=np.average(losses), hi=max(losses), lo=min(losses))
+                bar.tick(loss=loss, avg=np.average(losses), hi=max(losses), lo=min(losses), norm=float(norm))
                 saver.save(sess, save_path, global_step=epoch)
             avg_loss = np.average(losses)
             epoch_losses.append(avg_loss)

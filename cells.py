@@ -115,14 +115,12 @@ class AnsPtrCell(RNNCell):
             s += tf.reshape(tf.matmul(h_a, W_a), [-1, 1, self._hidden_size])
             s += b_a
             F = tf.nn.tanh(s)
-            # F = tf.Print(F, [tf.shape(F)])
             assert_rank("F", F, expected_rank=3)
 
             # B = softmax(F_k v + c)
             s = batch_matmul(F, v) + c
-            B_logits = s * self._mask
+            B_logits = s + self._mask   # Should add -1000 to all the padded positions
             B = tf.nn.softmax(s, dim=1)
-            # B = tf.Print(B, [B], summarize=100)
             B = tf.reshape(B, [-1, 1, self._P])
             assert_rank("B", B, expected_rank=3)
 

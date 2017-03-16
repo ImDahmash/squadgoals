@@ -34,6 +34,7 @@ class MatchLSTMModel(object):
 
         self._loss = None
         self._train_op = None
+        self._grad_norm = None
 
     @lru_cache()
     def _load_embeddings(self):
@@ -85,15 +86,24 @@ class MatchLSTMModel(object):
         loss = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=self._starts, logits=B_s) \
                 + tf.nn.sparse_softmax_cross_entropy_with_logits(labels=self._ends, logits=B_e)
         self._loss = tf.reduce_mean(loss)
-        self._train_op = AdamaxOptimizer(learning_rate=self._config.lr, beta1=0.9, beta2=0.999).minimize(self._loss)
+
+        optim = AdamaxOptimizer(learning_rate=self._config.lr, beta1=0.9, beta2=0.999)
+        grads_and_vars = optim.compute_gradients(self._loss)
+        gradients = [gv[0] for gv in grads_and_vars]
+        # variables = [gv[1] for gv in grads_and_vars]
+        self._grad_norm = tf.global_norm(gradients)
+        self._train_op = optim.apply_gradients(grads_and_vars)
         return self  # Return self to allow for chaining
 
-    def train(self, questions, contexts, answers, qlens, clens, sess=None):
+    def train(self, questions, contexts, answers, qlens, clens, sess=None, norms=False):
         if sess is None:
             sess = tf.get_default_session()
         feeds = self._build_feeds(questions, contexts, answers, qlens, clens)
-        _, loss = sess.run([self._train_op, self._loss], feed_dict=feeds)
-        return loss
+        _, loss, grad_norm = sess.run([self._train_op, self._loss, self._grad_norm], feed_dict=feeds)
+        if norms:
+            return loss, grad_norm
+        else:
+            return loss
 
     def predict(self, questions, contexts, qlens, clens, sess=None):
         if sess is None:
@@ -120,9 +130,9 @@ class MatchLSTMModel(object):
             self._qlens: qlens,
             self._clens: clens,
         }
+        batch_size = answers.shape[0]
 
         if answers is not None:
-            batch_size = answers.shape[0]
             spans = np.zeros([batch_size, 2])
             for i in range(batch_size):
                 line = answers[i]
@@ -133,8 +143,8 @@ class MatchLSTMModel(object):
             # Mask out lengths
             mask = np.zeros([batch_size, contexts.shape[1], 1])
             for i in range(batch_size):
-                start, end = int(spans[i, 0]), int(spans[i, 1])
-                mask[i, start:end+1] = np.array([1])
+                end = clens[i]
+                mask[i, end:] = -1000.0
 
             feeds[self._starts] = spans[:, 0]
             feeds[self._ends] = spans[:, 1]
