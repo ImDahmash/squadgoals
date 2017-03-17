@@ -8,5 +8,5 @@ fi
 
 NOW="$(date +%F-%H_%M_%S)"
 
-$PYTHON -u train.py --embed_dim=300 --embed_path=data/squad/glove.squad.300d.npy --epochs=10 --batch_size=30 "$@" 2>&1 | tee train_${NOW}.log
+$PYTHON -u train.py --embed_dim=300 --embed_path=data/squad/glove.squad.300d.npy --epochs=10 --batch_size=30 "$@" 2>&1 | tee output_${NOW}.log
 
