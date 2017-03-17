@@ -13,3 +13,4 @@ tags
 
 *.npy
 *.npz
+*.log

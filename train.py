@@ -48,8 +48,6 @@ tf.flags.DEFINE_string('save_dir', 'save', 'directory to save model checkpoints 
 tf.flags.DEFINE_boolean('resume', False, 'Resume from latest checkpoint in save_dir when flags is passed. Default is not to')
 tf.flags.DEFINE_boolean('nosave', False, 'When passed, saving the model to disk is not performed.')
 
-tf.flags.DEFINE_boolean('valid', False, 'When passed, perform validation instead of training.')
-
 """
 Utilities
 """
@@ -80,6 +78,7 @@ def minibatch_indexes(maxidx, batch_size):
 
 
 def main(_):
+    print("Starting")
     with tf.Session().as_default() as sess:
         # sess = tf_debug.LocalCLIDebugWrapperSession(sess)   # DEbugging
 
@@ -128,6 +127,7 @@ def main(_):
         for epoch in range(config.epochs):
             num_batches = math.ceil(num_examples / config.batch_size)
             losses = []
+            validation_losses = []
 
             # Create progress bar over this
             bar = Progress('Epoch {} of {}'.format(epoch + 1, config.epochs), steps=num_batches, width=20, sameline=False)
@@ -145,8 +145,25 @@ def main(_):
 
                 # Calculate some stats to print
                 bar.tick(loss=loss, avg10=np.average(losses[-10:]), hi=max(losses), lo=min(losses), norm=float(norm))
-                if not tf.flags.FLAGS.nosave:
+
+                if not tf.flags.FLAGS.nosave and (batch % 100 == 0):
+                    print("Checkpointing...")
                     saver.save(sess, save_path, global_step=epoch)
+                    print("Done")
+
+                # Perform validation as well.
+                if batch % 500 == 0 and batch > 0:
+                    # Perform validation here
+                    val_loss = validation(sess, config, model)
+                    validation_losses.append(val_loss)
+                    # Write the losses out to a file for later
+                    print("Saving statistics...")
+                    np.savez("statistics.npz", epoch_losses=epoch_losses, validation=validation_losses)
+
+
+            val_loss = validation(sess, config, model)
+            validation_losses.append(val_loss)
+
 
             avg_loss = np.average(losses)
             epoch_losses.append(avg_loss)
@@ -154,49 +171,26 @@ def main(_):
 
         # Write the losses out to a file for later
         print("Saving statistics...")
-        np.savez("statistics.npz", epoch_losses=epoch_losses)
+        np.savez("statistics.npz", epoch_losses=epoch_losses, validation=validation_losses)
+
+def validation(sess, config, model):
+    print("Performing validation...")
+    val_qs, val_cs, val_as, val_q_lens, val_c_lens = load_data(config.val_path)
+    num_examples = val_qs.shape[0]
+    BATCH_SIZE = 30
+    losses = []
+    for i in range(0, num_examples, BATCH_SIZE):
+        qs = val_qs[i:i+BATCH_SIZE]
+        cs = val_cs[i:i+BATCH_SIZE]
+        ans = val_as[i:i+BATCH_SIZE]
+        qlens = val_q_lens[i:i+BATCH_SIZE]
+        clens = val_c_lens[i:i+BATCH_SIZE]
+        loss = model.evaluate(qs, cs, ans, qlens, clens)
+        losses.append(loss)
+    val_loss = np.average(losses)
+    print("  \ Validation Loss: {:.7f}".format(val_loss))
+    return val_loss
 
 
 if __name__ == '__main__':
-    if not tf.flags.FLAGS.valid:
-        tf.app.run(main=main)
-    else:
-        # Perform batches of size 30
-        config = tf.flags.FLAGS
-        print("Configuration:")
-        pprint(tf.flags.FLAGS.__dict__['__flags'], indent=4)
-
-        # Time building the graph
-        tic = time.time()
-        if tf.flags.FLAGS.model == "match":
-            model = MatchLSTMModel(config).build_graph()
-        else:
-            model = BiLSTMModel(config).build_graph()
-        toc = time.time()
-        print("Took {:.2f}s to build graph.".format(toc - tic))
-
-        # Run validation in minibatches, see how long it takes
-        with tf.Session().as_default() as sess:
-            with tf.device("/cpu:0"):
-                # Run validation on CPU to avoid straining GPU memory
-                sess.run(tf.global_variables_initializer())
-
-                restorer = tf.train.Saver()
-                latest = tf.train.latest_checkpoint(config.save_dir)
-                print("Restoring from {}  ...".format(latest))
-                restorer.restore(sess, latest)
-
-                val_qs, val_cs, val_as, val_q_lens, val_c_lens = load_data(config.val_path)
-                num_examples = val_qs.shape[0]
-                BATCH_SIZE = 30
-                losses = []
-                for i in range(0, num_examples, BATCH_SIZE):
-                    qs = val_qs[i:i+BATCH_SIZE]
-                    cs = val_cs[i:i+BATCH_SIZE]
-                    ans = val_as[i:i+BATCH_SIZE]
-                    qlens = val_q_lens[i:i+BATCH_SIZE]
-                    clens = val_c_lens[i:i+BATCH_SIZE]
-                    loss = model.evaluate(qs, cs, ans, qlens, clens)
-                    losses.append(loss)
-                val_loss = np.average(losses)
-                print("  \ Validation Loss: {:.7f}".format(val_loss))
+    tf.app.run(main=main)
