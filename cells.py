@@ -1,5 +1,5 @@
 import tensorflow as tf
-from tensorflow.contrib.rnn import RNNCell, BasicLSTMCell
+from tensorflow.contrib.rnn import RNNCell, LSTMBlockCell
 
 from utils import *
 
@@ -8,7 +8,7 @@ class LSTMCellWithAtt(RNNCell):
     def __init__(self, Hq, hidden_size):
         self._Hq = Hq
         self._hidden_size = hidden_size
-        self._cell = BasicLSTMCell(hidden_size)
+        self._cell = LSTMBlockCell(hidden_size)
 
     @property
     def output_size(self):
@@ -45,14 +45,10 @@ class LSTMCellWithAtt(RNNCell):
             z = tf.concat([hp, tf.squeeze(att, axis=1)], 1)
 
             output, statetup = self._cell(z, state)
-            return output, (statetup.c, statetup.h)
+            return output, statetup
 
 
 class AnsPtrCell(RNNCell):
-    """
-    Note: I'm not actually certain we can do this in a batched fashion, as there are nodes of a different
-    size per each batch item. If we use the static self._P, then we can predict outside of the bounds.
-    """
     def __init__(self, Hr, hidden_size, mask=None):
         self._Hr = Hr
 
@@ -66,7 +62,7 @@ class AnsPtrCell(RNNCell):
             self._mask = mask
 
         self._hidden_size = hidden_size
-        self._cell = BasicLSTMCell(hidden_size)
+        self._cell = LSTMBlockCell(hidden_size)
 
     @property
     def state_size(self):
@@ -112,7 +108,7 @@ class AnsPtrCell(RNNCell):
             _, state = self._cell(cell_in, state)
 
             B_logits = tf.reshape(s, [-1, self._P])
-            return B_logits, (state.c, state.h)
+            return B_logits, state
 
 
 ######################################

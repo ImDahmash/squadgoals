@@ -38,6 +38,8 @@ tf.flags.DEFINE_string('optim', 'adam', 'Optimizer, one of "adam", "adadelta", "
 
 tf.flags.DEFINE_integer('subset', 0, 'If > 0, only trains on a subset of the train data of given size')
 
+tf.flags.DEFINE_float('keep_prob', 0.7, 'Keep probability for dropout.')
+
 tf.flags.DEFINE_string('embed_path', 'data/squad/glove.squad.300d.npy', "Path to a .npy file holding the GloVe vectors")
 tf.flags.DEFINE_string('train_path', 'data/squad/train.npz', "Path to training data as an .npz file")
 tf.flags.DEFINE_string('val_path', 'data/squad/val.npz', "Path to validation data as an .npz file")
@@ -142,7 +144,7 @@ def main(_):
                 losses.append(loss)
 
                 # Calculate some stats to print
-                bar.tick(loss=loss, avg=np.average(losses), hi=max(losses), lo=min(losses), norm=float(norm))
+                bar.tick(loss=loss, avg10=np.average(losses[-10:]), hi=max(losses), lo=min(losses), norm=float(norm))
                 if not tf.flags.FLAGS.nosave:
                     saver.save(sess, save_path, global_step=epoch)
 
@@ -173,6 +175,7 @@ if __name__ == '__main__':
         toc = time.time()
         print("Took {:.2f}s to build graph.".format(toc - tic))
 
+        # Run validation in minibatches, see how long it takes
         with tf.Session().as_default() as sess:
             with tf.device("/cpu:0"):
                 # Run validation on CPU to avoid straining GPU memory
@@ -184,5 +187,16 @@ if __name__ == '__main__':
                 restorer.restore(sess, latest)
 
                 val_qs, val_cs, val_as, val_q_lens, val_c_lens = load_data(config.val_path)
-                val_loss = model.evaluate(val_qs, val_cs, val_as, val_q_lens, val_c_lens)
+                num_examples = val_qs.shape[0]
+                BATCH_SIZE = 30
+                losses = []
+                for i in range(0, num_examples, BATCH_SIZE):
+                    qs = val_qs[i:i+BATCH_SIZE]
+                    cs = val_cs[i:i+BATCH_SIZE]
+                    ans = val_as[i:i+BATCH_SIZE]
+                    qlens = val_q_lens[i:i+BATCH_SIZE]
+                    clens = val_c_lens[i:i+BATCH_SIZE]
+                    loss = model.evaluate(qs, cs, ans, qlens, clens)
+                    losses.append(loss)
+                val_loss = np.average(losses)
                 print("  \ Validation Loss: {:.7f}".format(val_loss))

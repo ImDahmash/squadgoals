@@ -3,7 +3,7 @@ from functools import lru_cache
 import tensorflow as tf
 import numpy as np
 
-from tensorflow.contrib.rnn import BasicLSTMCell, GRUCell
+from tensorflow.contrib.rnn import GRUCell, DropoutWrapper, LSTMBlockCell
 
 from adamax import AdamaxOptimizer
 from cells import *
@@ -27,6 +27,7 @@ class MatchLSTMModel(object):
         self._qlens = tf.placeholder(tf.int32, [None], "question_lengths")
         self._clens = tf.placeholder(tf.int32, [None], "context_lengths")
         self._mask = tf.placeholder(tf.float32, [None, None, 1], "mask")
+        self._keep_prob = tf.placeholder(tf.float32, [], "keep_prob")
 
         self.B_s = None
         self.B_e = None
@@ -34,6 +35,7 @@ class MatchLSTMModel(object):
         self._loss = None
         self._train_op = None
         self._grad_norm = None
+        self._global_norm = 5.0 # Maximum norm at which point we want to clip.
 
     @lru_cache()
     def _load_embeddings(self):
@@ -45,7 +47,7 @@ class MatchLSTMModel(object):
         contexts = self._build_embedded(self._context)
         # P = tf.shape(contexts)[1]
 
-        cell = BasicLSTMCell(self._config.hidden_size)
+        cell = LSTMBlockCell(self._config.hidden_size)
         output, _ = tf.nn.dynamic_rnn(cell, contexts, sequence_length=self._clens, dtype=tf.float32)
         with tf.variable_scope("crappy", dtype=tf.float32):
             Ws = tf.get_variable("Ws", [self._config.hidden_size, 1], initializer=tf.contrib.layers.xavier_initializer())
@@ -71,30 +73,29 @@ class MatchLSTMModel(object):
 
         # Cell type based on config
         if self._config.cell_type == "lstm":
-            cell = BasicLSTMCell
+            cell = LSTMBlockCell
         elif self._config.cell_type == "gru":
             cell = GRUCell
 
 
         with tf.variable_scope("encode_question"):
             # Construct H_q from the paper, final shape should be [batch_size, Q, hidden_size]
-            encode_cell = cell(self._config.hidden_size)
+            encode_cell = DropoutWrapper(cell(self._config.hidden_size), output_keep_prob=self._keep_prob)
             H_q, _ = tf.nn.dynamic_rnn(encode_cell, questions, self._qlens, dtype=tf.float32)
             assert_rank("H_q", H_q, expected_rank=3)
             assert_dim("H_q", H_q, dim=2, expected_value=self._config.hidden_size)
 
 
         with tf.variable_scope("encode_passage"):
-            encode_cell = cell(self._config.hidden_size)
+            encode_cell = DropoutWrapper(cell(self._config.hidden_size), output_keep_prob=self._keep_prob)
             H_p, _  = tf.nn.dynamic_rnn(encode_cell, contexts, self._clens, dtype=tf.float32)
             assert_rank("H_p", H_p, expected_rank=3)
             assert_dim("H_p", H_p, dim=2, expected_value=self._config.hidden_size)
 
             # Calculate attention over question w.r.t. each token of the passage using the Match-LSTM cell.
-            attention_cell_fw = LSTMCellWithAtt(H_q, self._config.hidden_size)
-            attention_cell_bw = LSTMCellWithAtt(H_q, self._config.hidden_size)
+            attention_cell = DropoutWrapper(LSTMCellWithAtt(H_q, self._config.hidden_size), output_keep_prob=self._keep_prob)
             with tf.variable_scope("match_lstm"):
-                H_r, _ = tf.nn.bidirectional_dynamic_rnn(attention_cell_fw, attention_cell_bw,
+                H_r, _ = tf.nn.bidirectional_dynamic_rnn(attention_cell, attention_cell,
                                                          H_p, sequence_length=self._clens,
                                                          dtype=tf.float32)
                 H_r = tf.concat(H_r, axis=2)
@@ -119,21 +120,26 @@ class MatchLSTMModel(object):
         self._loss = tf.reduce_mean(loss)
 
         # COMMENT THIS OUT TO TURN OFF PRINTING
-        # self._loss = tf.Print(self._loss, [questions], summarize=300)
+        # self._loss = tf.Print(self._loss, [self._keep_prob], summarize=300)
 
         # Returns the gradient norms
         optim = AdamaxOptimizer(learning_rate=self._config.lr)
         grads_and_vars = optim.compute_gradients(self._loss)
         gradients = [gv[0] for gv in grads_and_vars]
-        # variables = [gv[1] for gv in grads_and_vars]      # Uncomment this to do gradient clipping later
+        variables = [gv[1] for gv in grads_and_vars]      # Uncomment this to do gradient clipping later
+
+        # Perform gradient clipping
+        gradients, _ = tf.clip_by_global_norm(gradients, self._global_norm)
+
         self._grad_norm = tf.global_norm(gradients)
+        grads_and_vars = zip(gradients, variables)
         self._train_op = optim.apply_gradients(grads_and_vars)
         return self  # Return self to allow for chaining
 
     def train(self, questions, contexts, answers, qlens, clens, sess=None, norms=False):
         if sess is None:
             sess = tf.get_default_session()
-        feeds = self._build_feeds(questions, contexts, answers, qlens, clens)
+        feeds = self._build_feeds(questions, contexts, answers, qlens, clens, keep_prob=self._config.keep_prob)
         _, loss, grad_norm = sess.run([self._train_op, self._loss, self._grad_norm], feed_dict=feeds)
         if norms:
             return loss, grad_norm
@@ -143,7 +149,7 @@ class MatchLSTMModel(object):
     def predict(self, questions, contexts, qlens, clens, sess=None):
         if sess is None:
             sess = tf.get_default_session()
-        feeds = self._build_feeds(questions, contexts, None, qlens, clens)
+        feeds = self._build_feeds(questions, contexts, None, qlens, clens, keep_prob=1.0)
         B_s_logits, B_e_logits = sess.run([self.B_s, self.B_e], feed_dict=feeds)
 
     def evaluate(self, questions, contexts, answers, qlens, clens, sess=None):
@@ -158,12 +164,13 @@ class MatchLSTMModel(object):
         embed = tf.reshape(embed, [tf.shape(ids)[0], tf.shape(ids)[1], self._config.embed_dim])
         return tf.cast(embed, dtype=dtype)
 
-    def _build_feeds(self, questions, contexts, answers, qlens, clens):
+    def _build_feeds(self, questions, contexts, answers, qlens, clens, keep_prob=1.0):
         feeds = {
             self._question: questions,
             self._context: contexts,
             self._qlens: qlens,
             self._clens: clens,
+            self._keep_prob: keep_prob,
         }
         batch_size = answers.shape[0]
 
