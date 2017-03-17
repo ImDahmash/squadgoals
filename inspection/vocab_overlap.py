@@ -1,7 +1,7 @@
 
 
 glove_words = set()
-with open('data/dwr/glove.6B.50d.txt', 'r') as glove:
+with open('data/dwr/glove.840B.300d.txt', 'r') as glove:
     for line in glove:
         glove_words.add(line.split()[0])
 

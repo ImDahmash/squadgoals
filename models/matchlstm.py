@@ -18,9 +18,8 @@ class MatchLSTMModel(object):
         # Setup configuration
         self._config = config
 
-        # configure model variables
-        # load GloVe embedding, don't train embedings
-        self._embed = tf.Variable(self._load_embeddings(), name="embeddings", trainable=False)
+        # load GloVe embedding, don't train embedings, also don't save them
+        self._embed = tf.constant(self._load_embeddings(), name="embeddings")
         self._question = tf.placeholder(tf.int32, [None, None], "question_batch")
         self._context = tf.placeholder(tf.int32, [None, None], "context_batch")
         self._starts = tf.placeholder(tf.int32, [None], "spans_batch")
@@ -39,8 +38,30 @@ class MatchLSTMModel(object):
     @lru_cache()
     def _load_embeddings(self):
         # Lazy compute the embedding matrix
-        print("Loading GloVe vectors from {}".format(self._config.embed_path))
+        print("{}: Loading GloVe vectors from {}".format(self.__class__.__name__, self._config.embed_path))
         return np.load(self._config.embed_path)
+
+    def _build_graph(self):
+        contexts = self._build_embedded(self._context)
+        # P = tf.shape(contexts)[1]
+
+        cell = BasicLSTMCell(self._config.hidden_size)
+        output, _ = tf.nn.dynamic_rnn(cell, contexts, sequence_length=self._clens, dtype=tf.float32)
+        with tf.variable_scope("crappy", dtype=tf.float32):
+            Ws = tf.get_variable("Ws", [self._config.hidden_size, 1], initializer=tf.contrib.layers.xavier_initializer())
+            bs = tf.get_variable("bs", shape=[])
+            We = tf.get_variable("We", shape=[self._config.hidden_size, 1], dtype=tf.float32, initializer=tf.contrib.layers.xavier_initializer())
+            be = tf.get_variable("be", shape=[])
+
+        starts = tf.squeeze(tf.nn.softmax(batch_matmul(output, Ws) + bs, dim=1))
+        ends = tf.squeeze(tf.nn.softmax(batch_matmul(output, We) + be, dim=1))
+
+        self._loss = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=self._starts, logits=starts) \
+                        + tf.nn.sparse_softmax_cross_entropy_with_logits(labels=self._ends, logits=ends)
+        self._loss = tf.reduce_mean(self._loss)
+        self._train_op = AdamaxOptimizer().minimize(self._loss)
+        self._grad_norm = tf.constant(0.0)
+        return self
 
     def build_graph(self):
         # Add an embeddings layer
@@ -54,30 +75,40 @@ class MatchLSTMModel(object):
         elif self._config.cell_type == "gru":
             cell = GRUCell
 
-        # Get a representation of the questions
+
         with tf.variable_scope("encode_question"):
+            # Construct H_q from the paper, final shape should be [batch_size, Q, hidden_size]
             encode_cell = cell(self._config.hidden_size)
             H_q, _ = tf.nn.dynamic_rnn(encode_cell, questions, self._qlens, dtype=tf.float32)
+            assert_rank("H_q", H_q, expected_rank=3)
+            assert_dim("H_q", H_q, dim=2, expected_value=self._config.hidden_size)
+
 
         with tf.variable_scope("encode_passage"):
             encode_cell = cell(self._config.hidden_size)
             H_p, _  = tf.nn.dynamic_rnn(encode_cell, contexts, self._clens, dtype=tf.float32)
+            assert_rank("H_p", H_p, expected_rank=3)
+            assert_dim("H_p", H_p, dim=2, expected_value=self._config.hidden_size)
 
-            attention_cell = LSTMCellWithAtt(H_q, self._config.hidden_size)
-            H_r, _ = tf.nn.bidirectional_dynamic_rnn(attention_cell, attention_cell,
-                                                     H_p, sequence_length=self._clens,
-                                                     dtype=tf.float32)
-            H_r = tf.concat(H_r, axis=2)
-            assert_dim("H_r", H_r, dim=2, expected_value = 2*self._config.hidden_size)
+            # Calculate attention over question w.r.t. each token of the passage using the Match-LSTM cell.
+            attention_cell_fw = LSTMCellWithAtt(H_q, self._config.hidden_size)
+            attention_cell_bw = LSTMCellWithAtt(H_q, self._config.hidden_size)
+            with tf.variable_scope("match_lstm"):
+                H_r, _ = tf.nn.bidirectional_dynamic_rnn(attention_cell_fw, attention_cell_bw,
+                                                         H_p, sequence_length=self._clens,
+                                                         dtype=tf.float32)
+                H_r = tf.concat(H_r, axis=2)
+            assert_rank("H_r", H_r, expected_rank=3)
+            assert_dim("H_r", H_r, dim=2, expected_value=2*self._config.hidden_size)
 
         with tf.variable_scope("answer_ptr"):
             answer_cell = AnsPtrCell(H_r, self._config.hidden_size, mask=self._mask)
-            state = answer_cell.zero_state(batch_size, dtype=tf.float32)
+            initial_state = answer_cell.zero_state(batch_size, dtype=tf.float32)
 
             # B_s and B_e are unscaled logits of the actual distribution.
-            B_s, state = answer_cell(None, state)
+            B_s, s1 = answer_cell(None, initial_state)
             tf.get_variable_scope().reuse_variables()
-            B_e, _ = answer_cell(None, state)
+            B_e, _ = answer_cell(None, s1)
 
         # Save these for predicting later, only calculated when we force them for .predict()
         self.B_s = tf.nn.softmax(B_s)
@@ -87,10 +118,14 @@ class MatchLSTMModel(object):
                 + tf.nn.sparse_softmax_cross_entropy_with_logits(labels=self._ends, logits=B_e)
         self._loss = tf.reduce_mean(loss)
 
-        optim = AdamaxOptimizer(learning_rate=self._config.lr, beta1=0.9, beta2=0.999)
+        # COMMENT THIS OUT TO TURN OFF PRINTING
+        # self._loss = tf.Print(self._loss, [questions], summarize=300)
+
+        # Returns the gradient norms
+        optim = AdamaxOptimizer(learning_rate=self._config.lr)
         grads_and_vars = optim.compute_gradients(self._loss)
         gradients = [gv[0] for gv in grads_and_vars]
-        # variables = [gv[1] for gv in grads_and_vars]
+        # variables = [gv[1] for gv in grads_and_vars]      # Uncomment this to do gradient clipping later
         self._grad_norm = tf.global_norm(gradients)
         self._train_op = optim.apply_gradients(grads_and_vars)
         return self  # Return self to allow for chaining

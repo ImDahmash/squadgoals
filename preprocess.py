@@ -93,14 +93,17 @@ def load_or_create(glove_root_dir, processed_dir, embed_size, id_to_word):
         # Re-arrange based on our vocabulary
         with gfile.GFile(tokens_path) as glove_tokens:
             for i, token in enumerate(glove_tokens):
-                glove_order[token] = i
+                # print(token)
+                glove_order[token.strip()] = i
+
+        print("Read {} tokens from {}".format(len(glove_order), tokens_path))
 
         # We want to create an embedding matrix that is the same size as the vocabulary
         trimmed_glove = np.zeros((len(id_to_word), embed_size))
 
         for i, vocab_word in enumerate(id_to_word):
             if vocab_word in glove_order:
-                trimmed_glove[i, :] = glove_mat[glove_order[vocab_word]]
+                trimmed_glove[i] = glove_mat[glove_order[vocab_word]]
 
         logging.info("Saving GloVe vectors to compact file {}".format(glove_final_path))
         np.save(glove_final_path, trimmed_glove)
@@ -214,6 +217,6 @@ if __name__ == '__main__':
     tf.flags.DEFINE_string("glove_dir", "data/dwr", "directory with GloVe files")
     tf.flags.DEFINE_string("squad_dir", "data/squad", "directory to save preprocessed files")
 
-    tf.flags.DEFINE_integer("embed_size", 100, "size of embeddings to generate")
-    tf.flags.DEFINE_integer("max_len", 100, "maximum nubmber of timesteps for a sequence")
+    tf.flags.DEFINE_integer("embed_size", 300, "size of embeddings to generate")
+    tf.flags.DEFINE_integer("max_len", 300, "maximum nubmber of timesteps for a sequence")
     tf.app.run()

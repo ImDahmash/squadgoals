@@ -16,28 +16,17 @@ from models import MatchLSTMModel, BiLSTMModel
 from utils import minibatch_index_iterator, Progress
 
 
-# tfdbg tensorflow debugger
-# from tensorflow.python import debug as tf_debug
-
-
 ###############################################################
 #       Code to setup the environment, configuration, etc.
 ###############################################################
-
-"""
-Global Variables                               #
-"""
-GLOVE_PATH = "data/squad/glove.squad.100d.npy"
-TRAIN_PATH = "data/squad/train.npz"
-VAL_PATH = "data/squad/val.npz"
 
 
 """
 Configuration options:
 """
-tf.flags.DEFINE_integer('hidden_size', 300, "Size of hidden states for encoder")
+tf.flags.DEFINE_integer('hidden_size', 150, "Size of hidden states for encoder")
 tf.flags.DEFINE_integer('batch_size', 30, 'size of mini-batches')
-tf.flags.DEFINE_integer('embed_dim', 100, 'embedding dimension')
+tf.flags.DEFINE_integer('embed_dim', 300, 'embedding dimension')
 tf.flags.DEFINE_integer('epochs', 10, 'number of epochs for training')
 tf.flags.DEFINE_integer('layers', 2, 'number of hidden layers')
 
@@ -49,18 +38,19 @@ tf.flags.DEFINE_string('optim', 'adam', 'Optimizer, one of "adam", "adadelta", "
 
 tf.flags.DEFINE_integer('subset', 0, 'If > 0, only trains on a subset of the train data of given size')
 
-tf.flags.DEFINE_string('embed_path', 'data/squad/glove.squad.100d.npy', "Path to a .npy file holding the GloVe vectors")
+tf.flags.DEFINE_string('embed_path', 'data/squad/glove.squad.300d.npy', "Path to a .npy file holding the GloVe vectors")
 tf.flags.DEFINE_string('train_path', 'data/squad/train.npz', "Path to training data as an .npz file")
 tf.flags.DEFINE_string('val_path', 'data/squad/val.npz', "Path to validation data as an .npz file")
 tf.flags.DEFINE_string('save_dir', 'save', 'directory to save model checkpoints after each epoch')
 
 tf.flags.DEFINE_boolean('resume', False, 'Resume from latest checkpoint in save_dir when flags is passed. Default is not to')
+tf.flags.DEFINE_boolean('nosave', False, 'When passed, saving the model to disk is not performed.')
+
+tf.flags.DEFINE_boolean('valid', False, 'When passed, perform validation instead of training.')
 
 """
 Utilities
 """
-
-
 def load_data(path):
     data = np.load(path)
 
@@ -106,13 +96,11 @@ def main(_):
         print("Took {:.2f}s to build graph.".format(toc - tic))
 
         sess.run(tf.global_variables_initializer())
+        print("Initialized globals.")
 
         print("Parameters:")
         pprint(list(kv.name for kv in tf.trainable_variables()))
         questions, contexts, answers, q_lens, c_lens = load_data(config.train_path)
-
-        # Load validation set data to find test loss after each epoch
-        val_qs, val_cs, val_as, val_q_lens, val_c_lens = load_data(config.val_path)
 
         num_examples = config.subset if config.subset > 0 else questions.shape[0]
         total_params = sum(v.get_shape().num_elements() for v in tf.trainable_variables())
@@ -153,22 +141,14 @@ def main(_):
                 loss, norm = model.train(qs, cs, ans, q_ls, c_ls, norms=True)
                 losses.append(loss)
 
-                if batch % 100 == 0:
-                    # Perform batches of size 30
-                    val_loss = model.evaluate(val_qs, val_cs, val_as, val_q_lens, val_c_lens)
-                    print("  \ Validation Loss: {:.7f}".format(val_loss))
-
                 # Calculate some stats to print
                 bar.tick(loss=loss, avg=np.average(losses), hi=max(losses), lo=min(losses), norm=float(norm))
-                saver.save(sess, save_path, global_step=epoch)
+                if not tf.flags.FLAGS.nosave:
+                    saver.save(sess, save_path, global_step=epoch)
+
             avg_loss = np.average(losses)
             epoch_losses.append(avg_loss)
             print("\n--- Epoch {} Average Train Loss: {:.7f}".format(epoch + 1, avg_loss))
-            # Run validation, get validation loss
-            val_loss = model.evaluate(val_qs, val_cs, val_as, val_q_lens, val_c_lens)
-            print("  \ Validation Loss: {:.7f}".format(val_loss))
-            # Save the model
-            saver.save(sess, save_path, global_step=epoch)
 
         # Write the losses out to a file for later
         print("Saving statistics...")
@@ -176,4 +156,33 @@ def main(_):
 
 
 if __name__ == '__main__':
-    tf.app.run(main=main)
+    if not tf.flags.FLAGS.valid:
+        tf.app.run(main=main)
+    else:
+        # Perform batches of size 30
+        config = tf.flags.FLAGS
+        print("Configuration:")
+        pprint(tf.flags.FLAGS.__dict__['__flags'], indent=4)
+
+        # Time building the graph
+        tic = time.time()
+        if tf.flags.FLAGS.model == "match":
+            model = MatchLSTMModel(config).build_graph()
+        else:
+            model = BiLSTMModel(config).build_graph()
+        toc = time.time()
+        print("Took {:.2f}s to build graph.".format(toc - tic))
+
+        with tf.Session().as_default() as sess:
+            with tf.device("/cpu:0"):
+                # Run validation on CPU to avoid straining GPU memory
+                sess.run(tf.global_variables_initializer())
+
+                restorer = tf.train.Saver()
+                latest = tf.train.latest_checkpoint(config.save_dir)
+                print("Restoring from {}  ...".format(latest))
+                restorer.restore(sess, latest)
+
+                val_qs, val_cs, val_as, val_q_lens, val_c_lens = load_data(config.val_path)
+                val_loss = model.evaluate(val_qs, val_cs, val_as, val_q_lens, val_c_lens)
+                print("  \ Validation Loss: {:.7f}".format(val_loss))

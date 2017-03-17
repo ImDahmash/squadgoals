@@ -3,68 +3,49 @@ from tensorflow.contrib.rnn import RNNCell, BasicLSTMCell
 
 from utils import *
 
+
 class LSTMCellWithAtt(RNNCell):
-    def __init__(self, H_q, hidden_size):
-        self.H_q = H_q
-
-        shape = tf.shape(H_q)
-        self.batch_size = shape[0]
-        self.Q = shape[1]
-
-        self.hidden_size = hidden_size
-        self.cell = BasicLSTMCell(self.hidden_size)
-
-    @property
-    def state_size(self):
-        # Assume we have state_is_tuple, so we can interface
-        # with the LSTM cell underneath
-        return (self.hidden_size, self.hidden_size)
+    def __init__(self, Hq, hidden_size):
+        self._Hq = Hq
+        self._hidden_size = hidden_size
+        self._cell = BasicLSTMCell(hidden_size)
 
     @property
     def output_size(self):
-        return self.hidden_size
+        return self._hidden_size
 
-    def __call__(self, inputs, state, scope=None):
-        _, h_p = state # Ignore cell state, keep h
+    @property
+    def state_size(self):
+        return (self._hidden_size, self._hidden_size)
 
-        with tf.variable_scope(type(self).__name__):
-            with tf.variable_scope("weights", initializer = tf.contrib.layers.xavier_initializer()):
-                W_q = tf.get_variable("W_q", shape=[self.hidden_size, self.hidden_size], dtype=tf.float32)
-                W_p = tf.get_variable("W_p", shape=[self.hidden_size, self.hidden_size], dtype=tf.float32)
-                W_r = tf.get_variable("W_r", shape=[self.hidden_size, self.hidden_size], dtype=tf.float32)
-                W = tf.get_variable("W", shape=[self.hidden_size, 1], dtype=tf.float32, initializer = tf.contrib.layers.xavier_initializer())
+    def __call__(self, hp, state, scope=None):
+        # Extract h_r as second element of state, discard the cell c_r
+        _, hr = state
 
-            with tf.variable_scope("biases", initializer = tf.constant_initializer(0.0)):
-                b_p = tf.get_variable("b_p", shape=[self.hidden_size], dtype=tf.float32)
-                b = tf.get_variable("b", shape=[1], dtype=tf.float32)
+        with tf.variable_scope(scope or type(self).__name__):
+            with tf.variable_scope("weights", dtype=tf.float32):
+                Wq = tf.get_variable("Wq", [self._hidden_size, self._hidden_size], initializer=tf.contrib.layers.xavier_initializer())
+                Wr = tf.get_variable("Wr", [self._hidden_size, self._hidden_size], initializer=tf.contrib.layers.xavier_initializer())
+                Wp = tf.get_variable("Wp", [self._hidden_size, self._hidden_size], initializer=tf.contrib.layers.xavier_initializer())
+                Wg = tf.get_variable("Wg", [self._hidden_size, 1], initializer=tf.contrib.layers.xavier_initializer())
+            with tf.variable_scope("biases", initializer=tf.constant_initializer(0.0), dtype=tf.float32):
+                bp = tf.get_variable("bp", [self._hidden_size])
+                b = tf.get_variable("b", [])
 
-            term1 = batch_matmul(self.H_q, W_q)
-            assert_rank("term1", term1, expected_rank=3)
+            qterm = batch_matmul(self._Hq, Wq)
+            rpterm = tf.matmul(hp, Wp)
+            rpterm += tf.matmul(hr, Wr)
+            rpterm += bp
 
-            # Second term
-            term2 = tf.matmul(inputs, W_p)
-            term2 = tf.expand_dims(term2, axis=1)
+            G = tf.nn.tanh(qterm + tf.expand_dims(rpterm, 1))
+            alpha = tf.nn.softmax(batch_matmul(G, Wg) + b, dim=1)
+            alpha = tf.transpose(alpha, [0, 2, 1])
 
-            term3 = tf.matmul(h_p, W_r)
-            term3 = tf.expand_dims(term3, axis=1)
+            att = tf.matmul(alpha, self._Hq)
+            z = tf.concat([hp, tf.squeeze(att, axis=1)], 1)
 
-            total = term1 + term2 + term3 + b_p
-
-            G = tf.nn.tanh(total)
-            G = tf.reshape(G, [self.batch_size * self.Q, self.hidden_size])
-            assert_dim("G", G, dim=1, expected_value=self.hidden_size)
-
-            # Reshape before multiplication
-            alpha = tf.nn.softmax(tf.matmul(G, W) + b)
-            alpha = tf.reshape(alpha, [self.batch_size, 1, self.Q])
-
-            attended = tf.matmul(alpha, self.H_q)
-            inputs = tf.reshape(inputs, [self.batch_size, 1, self.hidden_size])
-            z_i = tf.concat([inputs, attended], axis=2)
-            z_i = tf.reshape(z_i, [self.batch_size, 2*self.hidden_size])
-
-            output, states = self.cell(z_i, state)
-            return output, (states.c, states.h)
+            output, statetup = self._cell(z, state)
+            return output, (statetup.c, statetup.h)
 
 
 class AnsPtrCell(RNNCell):
@@ -101,12 +82,12 @@ class AnsPtrCell(RNNCell):
         _, h_a = state
 
         with tf.variable_scope(type(self).__name__):
-            with tf.variable_scope("weights", initializer = tf.contrib.layers.xavier_initializer()):
-                V = tf.get_variable("V", shape=[2*self._hidden_size, self._hidden_size], dtype=tf.float32)
-                W_a = tf.get_variable("W_a", shape=[self._hidden_size, self._hidden_size], dtype=tf.float32)
-                v = tf.get_variable("v", shape=[self._hidden_size, 1], dtype=tf.float32)
+            with tf.variable_scope("weights"):
+                V = tf.get_variable("V", shape=[2*self._hidden_size, self._hidden_size], dtype=tf.float32, initializer=tf.contrib.layers.xavier_initializer())
+                W_a = tf.get_variable("W_a", shape=[self._hidden_size, self._hidden_size], dtype=tf.float32, initializer=tf.contrib.layers.xavier_initializer())
+                v = tf.get_variable("v", shape=[self._hidden_size, 1], dtype=tf.float32, initializer=tf.contrib.layers.xavier_initializer())
 
-            with tf.variable_scope("biases", initializer = tf.constant_initializer(0.0)):
+            with tf.variable_scope("biases", initializer=tf.constant_initializer(0.0)):
                 b_a = tf.get_variable("b_a", shape=[1, self._hidden_size], dtype=tf.float32)
                 c = tf.get_variable("c", shape=[1], dtype=tf.float32)
 
@@ -118,8 +99,9 @@ class AnsPtrCell(RNNCell):
             assert_rank("F", F, expected_rank=3)
 
             # B = softmax(F_k v + c)
-            s = batch_matmul(F, v) + c
-            B_logits = s + self._mask   # Should add -1000 to all the padded positions
+            s = batch_matmul(F, v)
+            s += c
+            B_logits = tf.squeeze(s + self._mask)   # Should add -1000 to all the padded positions
             B = tf.nn.softmax(s, dim=1)
             B = tf.reshape(B, [-1, 1, self._P])
             assert_rank("B", B, expected_rank=3)
