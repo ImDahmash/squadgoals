@@ -97,7 +97,7 @@ class AnsPtrCell(RNNCell):
             # B = softmax(F_k v + c)
             s = batch_matmul(F, v)
             s += c
-            B_logits = tf.squeeze(s + self._mask)   # Should add -1000 to all the padded positions
+            B_logits = s + self._mask   # Should add -1000 to all the padded positions
             B = tf.nn.softmax(s, dim=1)
             B = tf.reshape(B, [-1, 1, self._P])
             assert_rank("B", B, expected_rank=3)
