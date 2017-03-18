@@ -46,8 +46,8 @@ tf.flags.DEFINE_string('val_path', 'data/squad/val.npz', "Path to validation dat
 tf.flags.DEFINE_string('save_dir', 'save', 'directory to save model checkpoints after each epoch')
 
 tf.flags.DEFINE_boolean('resume', False, 'Resume from latest checkpoint in save_dir when flags is passed. Default is not to')
-tf.flags.DEFINE_boolean('save', False, 'Checkpoint the model after each epoch.')
-tf.flags.DEFINE_boolean('valid', False, 'Perform validation periodically.')
+tf.flags.DEFINE_boolean('save', True, 'Checkpoint the model after each epoch.')
+tf.flags.DEFINE_boolean('valid', True, 'Perform validation periodically.')
 
 """
 Utilities
