@@ -8,6 +8,7 @@ from tensorflow.contrib.rnn import GRUCell, DropoutWrapper, LSTMBlockCell
 from adamax import AdamaxOptimizer
 from cells import *
 from utils import *
+from bidirect import *
 
 
 class MatchLSTMModel(object):
@@ -28,6 +29,7 @@ class MatchLSTMModel(object):
         self._clens = tf.placeholder(tf.int32, [None], "context_lengths")
         self._mask = tf.placeholder(tf.float32, [None, None, 1], "mask")
         self._keep_prob = tf.placeholder(tf.float32, [], "keep_prob")
+        self._lr = tf.placeholder(tf.float32, [], "learning_rate")
 
         self.B_s = None
         self.B_e = None
@@ -82,7 +84,7 @@ class MatchLSTMModel(object):
             # Construct H_q from the paper, final shape should be [batch_size, Q, hidden_size]
             # Create encoding using the BiLSTM instead
             encode_cell = DropoutWrapper(cell(self._config.hidden_size), output_keep_prob=self._keep_prob)
-            H_q, _ = tf.nn.bidirectional_dynamic_rnn(encode_cell, encode_cell, questions, self._qlens, dtype=tf.float32)
+            H_q, _ = bidirectional_dynamic_rnn(encode_cell, encode_cell, questions, self._qlens, dtype=tf.float32)
             H_q = tf.concat(H_q, 2)
             assert_rank("H_q", H_q, expected_rank=3)
             assert_dim("H_q", H_q, dim=2, expected_value=2*self._config.hidden_size)
@@ -90,7 +92,7 @@ class MatchLSTMModel(object):
 
         with tf.variable_scope("encode_passage"):
             encode_cell = DropoutWrapper(cell(self._config.hidden_size), output_keep_prob=self._keep_prob)
-            H_p, _  = tf.nn.bidirectional_dynamic_rnn(encode_cell, encode_cell, contexts, self._clens, dtype=tf.float32)
+            H_p, _  = bidirectional_dynamic_rnn(encode_cell, encode_cell, contexts, self._clens, dtype=tf.float32)
             H_p = tf.concat(H_p, 2)
             assert_rank("H_p", H_p, expected_rank=3)
             assert_dim("H_p", H_p, dim=2, expected_value=2*self._config.hidden_size)
@@ -98,9 +100,7 @@ class MatchLSTMModel(object):
             # Calculate attention over question w.r.t. each token of the passage using the Match-LSTM cell.
             attention_cell = DropoutWrapper(LSTMCellWithAtt(H_q, 2*self._config.hidden_size), output_keep_prob=self._keep_prob)
             with tf.variable_scope("match_lstm"):
-                H_r, _ = tf.nn.bidirectional_dynamic_rnn(attention_cell, attention_cell,
-                                                         H_p, sequence_length=self._clens,
-                                                         dtype=tf.float32)
+                H_r, _ = bidirectional_dynamic_rnn(attention_cell, attention_cell, H_p, sequence_length=self._clens, dtype=tf.float32)
                 H_r = tf.concat(H_r, axis=2)
             assert_rank("H_r", H_r, expected_rank=3)
             assert_dim("H_r", H_r, dim=2, expected_value=4*self._config.hidden_size)
@@ -126,7 +126,7 @@ class MatchLSTMModel(object):
         # self._loss = tf.Print(self._loss, [self._keep_prob], summarize=300)
 
         # Returns the gradient norms
-        optim = AdamaxOptimizer(learning_rate=self._config.lr)
+        optim = AdamaxOptimizer(learning_rate=self._lr)
         grads_and_vars = optim.compute_gradients(self._loss)
         gradients = [gv[0] for gv in grads_and_vars]
         variables = [gv[1] for gv in grads_and_vars]      # Uncomment this to do gradient clipping later
@@ -139,10 +139,10 @@ class MatchLSTMModel(object):
         self._train_op = optim.apply_gradients(grads_and_vars)
         return self  # Return self to allow for chaining
 
-    def train(self, questions, contexts, answers, qlens, clens, sess=None, norms=False):
+    def train(self, questions, contexts, answers, qlens, clens, sess=None, norms=False, lr=0.01):
         if sess is None:
             sess = tf.get_default_session()
-        feeds = self._build_feeds(questions, contexts, answers, qlens, clens, keep_prob=self._config.keep_prob)
+        feeds = self._build_feeds(questions, contexts, answers, qlens, clens, keep_prob=self._config.keep_prob, lr=lr)
         _, loss, grad_norm = sess.run([self._train_op, self._loss, self._grad_norm], feed_dict=feeds)
         if norms:
             return loss, grad_norm
@@ -174,13 +174,14 @@ class MatchLSTMModel(object):
         embed = tf.reshape(embed, [tf.shape(ids)[0], tf.shape(ids)[1], self._config.embed_dim])
         return tf.cast(embed, dtype=dtype)
 
-    def _build_feeds(self, questions, contexts, answers, qlens, clens, keep_prob=1.0):
+    def _build_feeds(self, questions, contexts, answers, qlens, clens, keep_prob=1.0, lr=0.01):
         feeds = {
             self._question: questions,
             self._context: contexts,
             self._qlens: qlens,
             self._clens: clens,
             self._keep_prob: keep_prob,
+            self._lr: lr,
         }
         batch_size = questions.shape[0]
 

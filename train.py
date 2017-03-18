@@ -128,9 +128,13 @@ def main(_):
         epoch_losses = []
         validation_losses = []
         print("Begin training!")
+
         for epoch in range(config.epochs):
             num_batches = math.ceil(num_examples / config.batch_size)
             losses = []
+
+            # Halve the learning rate after each epoch
+            lr = config.lr * (0.5)**epoch
 
             # Create progress bar over this
             bar = Progress('Epoch {} of {}'.format(epoch + 1, config.epochs), steps=num_batches, width=20, sameline=False)
@@ -143,12 +147,12 @@ def main(_):
                 c_ls = c_lens[idxs]
 
                 # Perform train step
-                loss, norm = model.train(qs, cs, ans, q_ls, c_ls, norms=True)
+                loss, norm = model.train(qs, cs, ans, q_ls, c_ls, norms=True, lr=lr)
                 losses.append(loss)
                 all_losses.append(loss)
 
                 # Calculate some stats to print
-                bar.tick(loss=loss, avg10=np.average(losses[-10:]), hi=max(losses), lo=min(losses), norm=float(norm))
+                bar.tick(loss=loss, avg10=np.average(losses[-10:]), hi=max(losses), lo=min(losses), norm=float(norm), lr=lr)
 
                 if tf.flags.FLAGS.save and (batch % 100 == 0):
                     print("Checkpointing...")
