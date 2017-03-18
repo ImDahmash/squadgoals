@@ -34,7 +34,7 @@ tf.flags.DEFINE_string('optim', 'adam', 'Optimizer, one of "adam", "adadelta", "
 
 tf.flags.DEFINE_integer('subset', 0, 'If > 0, only trains on a subset of the train data of given size')
 
-tf.flags.DEFINE_float('keep_prob', 0.7, 'Keep probability for dropout.')
+tf.flags.DEFINE_float('keep_prob', 0.6, 'Keep probability for dropout.')
 
 tf.flags.DEFINE_string('embed_path', 'data/squad/glove.squad.300d.npy', "Path to a .npy file holding the GloVe vectors")
 tf.flags.DEFINE_string('train_path', 'data/squad/train.npz', "Path to training data as an .npz file")

@@ -80,30 +80,33 @@ class MatchLSTMModel(object):
 
         with tf.variable_scope("encode_question"):
             # Construct H_q from the paper, final shape should be [batch_size, Q, hidden_size]
+            # Create encoding using the BiLSTM instead
             encode_cell = DropoutWrapper(cell(self._config.hidden_size), output_keep_prob=self._keep_prob)
-            H_q, _ = tf.nn.dynamic_rnn(encode_cell, questions, self._qlens, dtype=tf.float32)
+            H_q, _ = tf.nn.bidirectional_dynamic_rnn(encode_cell, encode_cell, questions, self._qlens, dtype=tf.float32)
+            H_q = tf.concat(H_q, 2)
             assert_rank("H_q", H_q, expected_rank=3)
-            assert_dim("H_q", H_q, dim=2, expected_value=self._config.hidden_size)
+            assert_dim("H_q", H_q, dim=2, expected_value=2*self._config.hidden_size)
 
 
         with tf.variable_scope("encode_passage"):
             encode_cell = DropoutWrapper(cell(self._config.hidden_size), output_keep_prob=self._keep_prob)
-            H_p, _  = tf.nn.dynamic_rnn(encode_cell, contexts, self._clens, dtype=tf.float32)
+            H_p, _  = tf.nn.bidirectional_dynamic_rnn(encode_cell, encode_cell, contexts, self._clens, dtype=tf.float32)
+            H_p = tf.concat(H_p, 2)
             assert_rank("H_p", H_p, expected_rank=3)
-            assert_dim("H_p", H_p, dim=2, expected_value=self._config.hidden_size)
+            assert_dim("H_p", H_p, dim=2, expected_value=2*self._config.hidden_size)
 
             # Calculate attention over question w.r.t. each token of the passage using the Match-LSTM cell.
-            attention_cell = DropoutWrapper(LSTMCellWithAtt(H_q, self._config.hidden_size), output_keep_prob=self._keep_prob)
+            attention_cell = DropoutWrapper(LSTMCellWithAtt(H_q, 2*self._config.hidden_size), output_keep_prob=self._keep_prob)
             with tf.variable_scope("match_lstm"):
                 H_r, _ = tf.nn.bidirectional_dynamic_rnn(attention_cell, attention_cell,
                                                          H_p, sequence_length=self._clens,
                                                          dtype=tf.float32)
                 H_r = tf.concat(H_r, axis=2)
             assert_rank("H_r", H_r, expected_rank=3)
-            assert_dim("H_r", H_r, dim=2, expected_value=2*self._config.hidden_size)
+            assert_dim("H_r", H_r, dim=2, expected_value=4*self._config.hidden_size)
 
         with tf.variable_scope("answer_ptr"):
-            answer_cell = AnsPtrCell(H_r, self._config.hidden_size, mask=self._mask)
+            answer_cell = AnsPtrCell(H_r, 2*self._config.hidden_size, mask=self._mask)
             initial_state = answer_cell.zero_state(batch_size, dtype=tf.float32)
 
             # B_s and B_e are unscaled logits of the actual distribution.

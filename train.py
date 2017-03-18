@@ -38,7 +38,7 @@ tf.flags.DEFINE_string('optim', 'adam', 'Optimizer, one of "adam", "adadelta", "
 
 tf.flags.DEFINE_integer('subset', 0, 'If > 0, only trains on a subset of the train data of given size')
 
-tf.flags.DEFINE_float('keep_prob', 0.7, 'Keep probability for dropout.')
+tf.flags.DEFINE_float('keep_prob', 0.6, 'Keep probability for dropout.')
 
 tf.flags.DEFINE_string('embed_path', 'data/squad/glove.squad.300d.npy', "Path to a .npy file holding the GloVe vectors")
 tf.flags.DEFINE_string('train_path', 'data/squad/train.npz', "Path to training data as an .npz file")
@@ -46,7 +46,8 @@ tf.flags.DEFINE_string('val_path', 'data/squad/val.npz', "Path to validation dat
 tf.flags.DEFINE_string('save_dir', 'save', 'directory to save model checkpoints after each epoch')
 
 tf.flags.DEFINE_boolean('resume', False, 'Resume from latest checkpoint in save_dir when flags is passed. Default is not to')
-tf.flags.DEFINE_boolean('nosave', False, 'When passed, saving the model to disk is not performed.')
+tf.flags.DEFINE_boolean('save', False, 'Checkpoint the model after each epoch.')
+tf.flags.DEFINE_boolean('valid', False, 'Perform validation periodically.')
 
 """
 Utilities
@@ -111,6 +112,7 @@ def main(_):
         # Setup saving
         saver = tf.train.Saver(max_to_keep=0)  # Don't delete checkpoint files, cleanup manually
         save_path = os.path.join(config.save_dir, "model")
+        best_path = os.path.join(config.save_dir, "model_best")
         if not tf.gfile.Exists(config.save_dir):
             tf.gfile.MakeDirs(config.save_dir)
 
@@ -148,23 +150,29 @@ def main(_):
                 # Calculate some stats to print
                 bar.tick(loss=loss, avg10=np.average(losses[-10:]), hi=max(losses), lo=min(losses), norm=float(norm))
 
-                if not tf.flags.FLAGS.nosave and (batch % 100 == 0):
+                if tf.flags.FLAGS.save and (batch % 100 == 0):
                     print("Checkpointing...")
                     saver.save(sess, save_path, global_step=epoch)
                     print("Done")
 
-                # Perform validation as well.
-                if batch % 500 == 0 and batch > 0:
+                # Calculate validation
+                if config.valid and batch % 500 == 0 and batch > 0:
                     # Perform validation here
                     val_loss = validation(sess, config, model)
+                    if len(validation_losses) == 0 or val_loss > np.max(validation_losses):
+                        # Save best model
+                        print("===> New best validation! Saving to {}".format(best_path))
+                        saver.save(sess, best_path)
+
                     validation_losses.append(val_loss)
                     # Write the losses out to a file for later
                     print("Saving statistics...")
                     np.savez("statistics.npz", epoch_losses=epoch_losses, validation=validation_losses)
 
 
-            val_loss = validation(sess, config, model)
-            validation_losses.append(val_loss)
+            if config.valid:
+                val_loss = validation(sess, config, model)
+                validation_losses.append(val_loss)
 
 
             avg_loss = np.average(losses)
@@ -172,8 +180,9 @@ def main(_):
             print("\n--- Epoch {} Average Train Loss: {:.7f}".format(epoch + 1, avg_loss))
 
         # Write the losses out to a file for later
-        print("Saving statistics...")
-        np.savez("statistics.npz", epoch_losses=epoch_losses, validation=validation_losses)
+        if config.save:
+            print("Saving statistics...")
+            np.savez("statistics.npz", epoch_losses=epoch_losses, validation=validation_losses)
 
 
 def validation(sess, config, model):
