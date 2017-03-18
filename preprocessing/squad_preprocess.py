@@ -109,7 +109,8 @@ def read_write_dataset(dataset, tier, prefix):
     with open(os.path.join(prefix, tier +'.context'), 'w') as context_file,  \
          open(os.path.join(prefix, tier +'.question'), 'w') as question_file,\
          open(os.path.join(prefix, tier +'.answer'), 'w') as text_file, \
-         open(os.path.join(prefix, tier +'.span'), 'w') as span_file:
+         open(os.path.join(prefix, tier +'.span'), 'w') as span_file, \
+         open(os.path.join(prefix, tier +'.qid'), 'w') as qid_file:
 
         for articles_id in tqdm(range(len(dataset['data'])), desc="Preprocessing {}".format(tier)):
             article_paragraphs = dataset['data'][articles_id]['paragraphs']
@@ -121,18 +122,24 @@ def read_write_dataset(dataset, tier, prefix):
 
                 qas = article_paragraphs[pid]['qas']
                 for qid in range(len(qas)):
+                    # Get the id
                     question = qas[qid]['question']
                     question_tokens = tokenize(question)
 
-                    answers = qas[qid]['answers']
                     qn += 1
+
+                    if tier == 'dev':
+                        context_file.write(' '.join(context_tokens) + '\n')
+                        question_file.write(' '.join(question_tokens) + '\n')
+                        question_id = qas[qid]['id']
+                        qid_file.write(str(question_id) + '\n')
+                        continue
 
                     num_answers = range(1)
 
                     for ans_id in num_answers:
                         # it contains answer_start, text
                         text = qas[qid]['answers'][ans_id]['text']
-                        a_s = qas[qid]['answers'][ans_id]['answer_start']
 
                         text_tokens = tokenize(text)
 
@@ -152,6 +159,7 @@ def read_write_dataset(dataset, tier, prefix):
                             question_file.write(' '.join(question_tokens) + '\n')
                             text_file.write(' '.join(text_tokens) + '\n')
                             span_file.write(' '.join([str(a_start_idx), str(a_end_idx)]) + '\n')
+
 
                         except Exception as e:
                             skipped += 1
@@ -211,11 +219,11 @@ if __name__ == '__main__':
 
     train_num_questions, train_num_answers = read_write_dataset(train_data, 'train', prefix)
 
-    # In train we have 87k+ questions, and one answer per question.
-    # The answer start range is also indicated
+    # # In train we have 87k+ questions, and one answer per question.
+    # # The answer start range is also indicated
 
-    # 1. Split train into train and validation into 95-5
-    # 2. Shuffle train, validation
+    # # 1. Split train into train and validation into 95-5
+    # # 2. Shuffle train, validation
     print("Splitting the dataset into train and validation")
     split_tier(prefix, 0.95, shuffle=True)
 
@@ -226,7 +234,7 @@ if __name__ == '__main__':
 
     # In dev, we have 10k+ questions, and around 3 answers per question (totaling
     # around 34k+ answers).
-    # dev_data = data_from_json(os.path.join(prefix, dev_filename))
-    # list_topics(dev_data)
-    # dev_num_questions, dev_num_answers = read_write_dataset(dev_data, 'dev', prefix)
-    # print("Processed {} questions and {} answers in dev".format(dev_num_questions, dev_num_answers))
+    dev_data = data_from_json(os.path.join(prefix, dev_filename))
+    list_topics(dev_data)
+    dev_num_questions, dev_num_answers = read_write_dataset(dev_data, 'dev', prefix)
+    print("Processed {} questions and {} answers in dev".format(dev_num_questions, dev_num_answers))

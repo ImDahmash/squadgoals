@@ -171,7 +171,10 @@ def build_dataset(prefix, id_to_word, word_to_id, glove_vectors, squad_root):
     span_path = pjoin(squad_root, prefix + ".span")
 
     # Setup a max_len here
-    context_max_len = tf.flags.FLAGS.max_len
+    if prefix == "dev":
+        context_max_len = None  # Do not truncate dev dataset
+    else:
+        context_max_len = tf.flags.FLAGS.max_len
     context, ind, context_lens = tokens_to_ids(context_path, word_to_id, max_len=context_max_len)
     question, _, question_lens = tokens_to_ids(question_path, word_to_id, useindexes=ind)
     answer = np.zeros(context.shape[:2], dtype='int32')
@@ -187,9 +190,12 @@ def build_dataset(prefix, id_to_word, word_to_id, glove_vectors, squad_root):
     # Write out the correct thing
     output_path = pjoin(squad_root, prefix + ".npz")
     logging.info("Saving all processed {} data to {}".format(prefix, output_path))
-    np.savez(output_path,
-             context=context, question=question, answer=answer,
-             context_lens=context_lens, question_lens=question_lens)
+    if prefix == "dev":
+        np.savez(output_path, context=context, question=question,
+                 context_lens=context_lens, question_lens=question_lens)
+    else:
+        np.savez(output_path, context=context, question=question,
+                 answer=answer, context_lens=context_lens, question_lens=question_lens)
 
 
 def main(_):
@@ -211,6 +217,7 @@ def main(_):
     # and validation set.
     build_dataset('train', id_to_word, word_to_id, glove_vectors, squad_dir)
     build_dataset('val', id_to_word, word_to_id, glove_vectors, squad_dir)
+    build_dataset('dev', id_to_word, word_to_id, glove_vectors, squad_dir)
 
 
 if __name__ == '__main__':

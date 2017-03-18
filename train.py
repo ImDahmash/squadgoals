@@ -109,7 +109,7 @@ def main(_):
 
 
         # Setup saving
-        saver = tf.train.Saver()
+        saver = tf.train.Saver(max_to_keep=0)  # Don't delete checkpoint files, cleanup manually
         save_path = os.path.join(config.save_dir, "model")
         if not tf.gfile.Exists(config.save_dir):
             tf.gfile.MakeDirs(config.save_dir)
@@ -122,12 +122,13 @@ def main(_):
             saver.restore(sess, latest)
 
         # Perform training pass
+        all_losses = []
         epoch_losses = []
+        validation_losses = []
         print("Begin training!")
         for epoch in range(config.epochs):
             num_batches = math.ceil(num_examples / config.batch_size)
             losses = []
-            validation_losses = []
 
             # Create progress bar over this
             bar = Progress('Epoch {} of {}'.format(epoch + 1, config.epochs), steps=num_batches, width=20, sameline=False)
@@ -142,6 +143,7 @@ def main(_):
                 # Perform train step
                 loss, norm = model.train(qs, cs, ans, q_ls, c_ls, norms=True)
                 losses.append(loss)
+                all_losses.append(loss)
 
                 # Calculate some stats to print
                 bar.tick(loss=loss, avg10=np.average(losses[-10:]), hi=max(losses), lo=min(losses), norm=float(norm))
@@ -172,6 +174,7 @@ def main(_):
         # Write the losses out to a file for later
         print("Saving statistics...")
         np.savez("statistics.npz", epoch_losses=epoch_losses, validation=validation_losses)
+
 
 def validation(sess, config, model):
     print("Performing validation...")

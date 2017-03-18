@@ -147,10 +147,17 @@ class MatchLSTMModel(object):
             return loss
 
     def predict(self, questions, contexts, qlens, clens, sess=None):
+        """
+        Returns the probability distribution over the start and end tokens.
+        """
         if sess is None:
             sess = tf.get_default_session()
         feeds = self._build_feeds(questions, contexts, None, qlens, clens, keep_prob=1.0)
-        B_s_logits, B_e_logits = sess.run([self.B_s, self.B_e], feed_dict=feeds)
+        B_s, B_e = sess.run([self.B_s, self.B_e], feed_dict=feeds)
+        # Return argmax across rows
+        preds_start = np.argmax(B_s, axis=1)
+        preds_end = np.argmax(B_e, axis=1)
+        return preds_start, preds_end
 
     def evaluate(self, questions, contexts, answers, qlens, clens, sess=None):
         if sess is None:
@@ -172,7 +179,14 @@ class MatchLSTMModel(object):
             self._clens: clens,
             self._keep_prob: keep_prob,
         }
-        batch_size = answers.shape[0]
+        batch_size = questions.shape[0]
+
+        # Mask out lengths
+        mask = np.zeros([batch_size, contexts.shape[1], 1])
+        for i in range(batch_size):
+            end = clens[i]
+            mask[i, end:] = -1000.0
+        feeds[self._mask] = mask
 
         if answers is not None:
             spans = np.zeros([batch_size, 2])
@@ -182,13 +196,7 @@ class MatchLSTMModel(object):
                 start, end = places[0], places[-1]
                 spans[i] = np.array([start, end])
 
-            # Mask out lengths
-            mask = np.zeros([batch_size, contexts.shape[1], 1])
-            for i in range(batch_size):
-                end = clens[i]
-                mask[i, end:] = -1000.0
 
             feeds[self._starts] = spans[:, 0]
             feeds[self._ends] = spans[:, 1]
-            feeds[self._mask] = mask
         return feeds
