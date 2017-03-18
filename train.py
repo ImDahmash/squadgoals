@@ -12,7 +12,7 @@ import numpy as np
 import tensorflow as tf
 # from tensorflow.contrib.rnn import DropoutWrapper, BasicLSTMCell, GRUCell, MultiRNNCell, RNNCell
 
-from models import MatchLSTMModel, BiLSTMModel
+from models import MatchLSTMModel
 from utils import minibatch_index_iterator, Progress
 
 
@@ -30,11 +30,8 @@ tf.flags.DEFINE_integer('embed_dim', 300, 'embedding dimension')
 tf.flags.DEFINE_integer('epochs', 10, 'number of epochs for training')
 tf.flags.DEFINE_integer('layers', 2, 'number of hidden layers')
 
-tf.flags.DEFINE_string('model', 'match', 'type of model, either "match" for Match-LSTM w/Answer Pointer or "bilstm" for simple BiLSTM baseline.')
 tf.flags.DEFINE_string('cell_type', 'lstm', "Cell type for RNN")
 tf.flags.DEFINE_float('lr', 0.01, 'learning rate')
-
-tf.flags.DEFINE_string('optim', 'adam', 'Optimizer, one of "adam", "adadelta", "sgd"')
 
 tf.flags.DEFINE_integer('subset', 0, 'If > 0, only trains on a subset of the train data of given size')
 
@@ -90,10 +87,7 @@ def main(_):
 
         # Time building the graph
         tic = time.time()
-        if tf.flags.FLAGS.model == "match":
-            model = MatchLSTMModel(config).build_graph()
-        else:
-            model = BiLSTMModel(config).build_graph()
+        model = MatchLSTMModel(config).build_graph()
         toc = time.time()
         print("Took {:.2f}s to build graph.".format(toc - tic))
 
