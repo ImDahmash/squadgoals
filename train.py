@@ -159,7 +159,7 @@ def main(_):
                 if config.valid and batch % 500 == 0 and batch > 0:
                     # Perform validation here
                     val_loss = validation(sess, config, model)
-                    if len(validation_losses) == 0 or val_loss > np.max(validation_losses):
+                    if len(validation_losses) == 0 or val_loss < np.min(validation_losses):
                         # Save best model
                         print("===> New best validation! Saving to {}".format(best_path))
                         saver.save(sess, best_path)
