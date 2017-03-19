@@ -171,6 +171,10 @@ def main(_):
             if config.valid:
                 val_loss = validation(sess, config, model)
                 validation_losses.append(val_loss)
+                if len(validation_losses) == 0 or val_loss < np.min(validation_losses):
+                    # Save best model
+                    print("===> New best validation! Saving to {}".format(best_path))
+                    saver.save(sess, best_path)
 
 
             avg_loss = np.average(losses)
