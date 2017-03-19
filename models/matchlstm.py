@@ -45,28 +45,6 @@ class MatchLSTMModel(object):
         print("{}: Loading GloVe vectors from {}".format(self.__class__.__name__, self._config.embed_path))
         return np.load(self._config.embed_path)
 
-    def _build_graph(self):
-        contexts = self._build_embedded(self._context)
-        # P = tf.shape(contexts)[1]
-
-        cell = LSTMBlockCell(self._config.hidden_size)
-        output, _ = tf.nn.dynamic_rnn(cell, contexts, sequence_length=self._clens, dtype=tf.float32)
-        with tf.variable_scope("crappy", dtype=tf.float32):
-            Ws = tf.get_variable("Ws", [self._config.hidden_size, 1], initializer=tf.contrib.layers.xavier_initializer())
-            bs = tf.get_variable("bs", shape=[])
-            We = tf.get_variable("We", shape=[self._config.hidden_size, 1], dtype=tf.float32, initializer=tf.contrib.layers.xavier_initializer())
-            be = tf.get_variable("be", shape=[])
-
-        starts = tf.squeeze(tf.nn.softmax(batch_matmul(output, Ws) + bs, dim=1))
-        ends = tf.squeeze(tf.nn.softmax(batch_matmul(output, We) + be, dim=1))
-
-        self._loss = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=self._starts, logits=starts) \
-                        + tf.nn.sparse_softmax_cross_entropy_with_logits(labels=self._ends, logits=ends)
-        self._loss = tf.reduce_mean(self._loss)
-        self._train_op = AdamaxOptimizer().minimize(self._loss)
-        self._grad_norm = tf.constant(0.0)
-        return self
-
     def build_graph(self):
         # Add an embeddings layer
         questions = self._build_embedded(self._question)
@@ -84,7 +62,7 @@ class MatchLSTMModel(object):
             # Construct H_q from the paper, final shape should be [batch_size, Q, hidden_size]
             # Create encoding using the BiLSTM instead
             encode_cell = DropoutWrapper(cell(self._config.hidden_size), output_keep_prob=self._keep_prob)
-            H_q, _ = bidirectional_dynamic_rnn(encode_cell, encode_cell, questions, self._qlens, dtype=tf.float32)
+            H_q, _ = tf.nn.bidirectional_dynamic_rnn(encode_cell, encode_cell, questions, self._qlens, dtype=tf.float32)
             H_q = tf.concat(H_q, 2)
             assert_rank("H_q", H_q, expected_rank=3)
             assert_dim("H_q", H_q, dim=2, expected_value=2*self._config.hidden_size)
@@ -92,7 +70,7 @@ class MatchLSTMModel(object):
 
         with tf.variable_scope("encode_passage"):
             encode_cell = DropoutWrapper(cell(self._config.hidden_size), output_keep_prob=self._keep_prob)
-            H_p, _  = bidirectional_dynamic_rnn(encode_cell, encode_cell, contexts, self._clens, dtype=tf.float32)
+            H_p, _  = tf.nn.bidirectional_dynamic_rnn(encode_cell, encode_cell, contexts, self._clens, dtype=tf.float32)
             H_p = tf.concat(H_p, 2)
             assert_rank("H_p", H_p, expected_rank=3)
             assert_dim("H_p", H_p, dim=2, expected_value=2*self._config.hidden_size)
