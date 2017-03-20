@@ -11,6 +11,8 @@ from collections import Counter
 from pprint import pprint
 
 import matplotlib.pyplot as plt
+plt.style.use("ggplot")
+
 import nltk
 import numpy as np
 from tqdm import tqdm
@@ -77,6 +79,8 @@ if __name__ == '__main__':
 
     avg_span, spans_distribution = average_span_length()
     print("Average length of spans: {:.2f} tokens".format(avg_span))
+
+
 
     plt.hist(spans_distribution, bins=np.arange(0, 10, 1))
     plt.xlabel("Span Length")
