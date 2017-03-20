@@ -17,7 +17,8 @@ epoch_train_losses = np.array([
 	2.9261239,
 	2.8633306,
 	2.8216517,
-	2.8039637
+	2.8039637,
+	2.7948327,
 ])
 
 
@@ -31,13 +32,15 @@ validation_loss = np.array([
     3.5258894,
     3.53464341,
     3.53921223,
-    3.5437756
+    3.5437756,
+    3.5417814,
 ])
 
-xs = np.arange(1, 10)
+xs = np.arange(1, 11)
 plt.plot(xs, epoch_train_losses)
 plt.plot(xs, validation_loss)
+plt.xticks(xs)
 plt.xlabel("Epoch")
-plt.ylabel("Average Batch Cross Entropy")
+plt.ylabel("Mean Cross Entropy")
 plt.title("Loss Across Epochs")
 plt.savefig("stats/loss.png")
